@@ -1,0 +1,53 @@
+{
+  "manifestVersion": "1.0",
+  "appId": "com.example.full-app",
+  "shortName": "full-app",
+  "nsPrefix": "fa",
+  "name": { "zh": "备忘本", "en": "Full App" },
+  "version": "1.0.0",
+  "description": { "zh": "完整型演示：面板 + agent + skill + 数据库迁移 + controller" },
+  "author": "Example",
+  "database": { "schemaName": "app_full_app", "poolMax": 3 },
+  "permissions": [
+    { "id": "fa:use", "label": { "zh": "使用备忘本" }, "default": "user" }
+  ],
+  "migrations": [
+    { "version": 1, "file": "migrations/001_create_notes.sql" },
+    { "version": 2, "file": "migrations/002_seed_notes.sql" }
+  ],
+  "agents": [{ "file": "agents/fa_assistant.yaml" }],
+  "skills": [{ "dir": "skills/fa-format" }],
+  "backend": {
+    "entry": "dist/backend/index.js",
+    "module": "FullAppModule",
+    "toolProviders": [
+      {
+        "class": "NoteToolProvider",
+        "toolIds": ["fa_note_add"],
+        "group": "备忘",
+        "tokenLimits": { "default": 8000 }
+      }
+    ],
+    "controllers": [
+      {
+        "class": "NoteController",
+        "handlers": [
+          "NoteController.listNotes",
+          "NoteController.addNote",
+          "NoteController.deleteNote"
+        ]
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": "faMain",
+      "name": { "zh": "备忘本" },
+      "groupName": "应用",
+      "permission": "fa:use",
+      "entryComponent": "dist/pages/NotePanel.js",
+      "agentId": "fa_assistant",
+      "keepAlive": true
+    }
+  ]
+}

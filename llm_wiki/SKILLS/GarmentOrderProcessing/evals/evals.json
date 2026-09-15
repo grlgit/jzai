@@ -1,0 +1,23 @@
+{
+  "skill_name": "GarmentOrderProcessing",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "帮我处理这个H&M的外套订单，文件在 /Users/greale/llm_wiki/GarmentOrderProcessing-workspace/test-data/order_hm_jacket.xlsx ，解析完后查一下wiki里有没有H&M的生产标准，然后帮我整理成ERP可以录入的格式",
+      "expected_output": "应正确提取款号HM-JK-2025-A003、4个颜色的分色分码数量(总数7930)、交期2025-08-15、上海港等基本信息；应通过MCP查询Wiki中H&M客户标准和外套生产要求；最终输出ERP订单格式的JSON数据并请求用户确认",
+      "files": ["/Users/greale/llm_wiki/GarmentOrderProcessing-workspace/test-data/order_hm_jacket.xlsx"]
+    },
+    {
+      "id": 2,
+      "prompt": "这个是ZARA的衬衫PO单 /Users/greale/llm_wiki/GarmentOrderProcessing-workspace/test-data/order_zara_shirt.xlsx ，帮我录到ERP系统里，记得查一下衬衫的车缝和包装标准",
+      "expected_output": "应正确解析表头偏移的Excel格式；提取款号ZR-SH-5501、3个颜色(白色/浅蓝/粉色)、总数6850、交期2025-07-20、深圳蛇口港；查询Wiki中ZARA客户标准和衬衫的车缝/包装要求；输出ERP格式并确认",
+      "files": ["/Users/greale/llm_wiki/GarmentOrderProcessing-workspace/test-data/order_zara_shirt.xlsx"]
+    },
+    {
+      "id": 3,
+      "prompt": "新来了一个优衣库的裤子订单 /Users/greale/llm_wiki/GarmentOrderProcessing-workspace/test-data/order_uniqlo_trousers.xlsx ，这个订单有三个Sheet，帮我把订单信息整理出来，查一下wiki里裤子的生产标准，特别是车缝要求和标签要求",
+      "expected_output": "应能处理多Sheet结构：从Main提取基本信息(UQ-PT-3302, UNIQLO, 裤子, 2025-09-30, 宁波港)，从Qty Breakdown提取3色8码的数量(总数6460)，从Special Requirements提取特殊要求；查询Wiki中裤子的车缝和标签标准；合并所有信息输出ERP格式",
+      "files": ["/Users/greale/llm_wiki/GarmentOrderProcessing-workspace/test-data/order_uniqlo_trousers.xlsx"]
+    }
+  ]
+}

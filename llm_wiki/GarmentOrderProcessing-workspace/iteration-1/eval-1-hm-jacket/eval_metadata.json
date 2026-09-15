@@ -1,0 +1,62 @@
+{
+  "eval_id": 1,
+  "eval_name": "hm-jacket-standard-format",
+  "prompt": "帮我处理这个H&M的外套订单，文件在 /Users/greale/llm_wiki/GarmentOrderProcessing-workspace/test-data/order_hm_jacket.xlsx ，解析完后查一下wiki里有没有H&M的生产标准，然后帮我整理成ERP可以录入的格式",
+  "assertions": [
+    {
+      "id": "a1_style_no",
+      "text": "正确提取款号 HM-JK-2025-A003",
+      "type": "contains",
+      "target": "erp_order.json",
+      "expected": "HM-JK-2025-A003"
+    },
+    {
+      "id": "a1_total_qty",
+      "text": "总数量正确为7930",
+      "type": "contains",
+      "target": "erp_order.json",
+      "expected": "7930"
+    },
+    {
+      "id": "a1_four_colors",
+      "text": "识别全部4个颜色（黑色、深蓝、军绿、灰色）",
+      "type": "contains_all",
+      "target": "erp_order.json",
+      "expected": ["BLK", "NVY", "OLV", "GRY"]
+    },
+    {
+      "id": "a1_delivery_date",
+      "text": "正确提取交期 2025-08-15",
+      "type": "contains",
+      "target": "erp_order.json",
+      "expected": "2025-08-15"
+    },
+    {
+      "id": "a1_port",
+      "text": "正确提取提货港（上海港）",
+      "type": "contains_any",
+      "target": "erp_order.json",
+      "expected": ["上海", "Shanghai"]
+    },
+    {
+      "id": "a1_wiki_query",
+      "text": "查询了Wiki知识库获取生产标准",
+      "type": "file_exists",
+      "target": "summary.md",
+      "expected": "wiki"
+    },
+    {
+      "id": "a1_erp_json_valid",
+      "text": "输出了有效的ERP订单JSON文件",
+      "type": "file_exists",
+      "target": "erp_order.json"
+    },
+    {
+      "id": "a1_order_lines",
+      "text": "order_lines展开为颜色×尺码的明细行",
+      "type": "contains",
+      "target": "erp_order.json",
+      "expected": "order_lines"
+    }
+  ]
+}

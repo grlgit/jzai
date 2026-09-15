@@ -1,0 +1,64 @@
+id: financial_statement
+name: 财务报表
+description: 财务数据报表，含收支汇总、趋势图和明细
+icon: "💰"
+
+page:
+  size: A4
+  orientation: portrait
+  margins: [40, 60, 40, 60]
+
+header:
+  left: "{{company_name}}"
+  right: "{{report_date}}"
+  borderBottom: true
+
+footer:
+  center: "第 {{page}} 页 / 共 {{pages}} 页"
+  right: "内部文件 · 机密"
+
+sections:
+  - type: heading
+    level: 1
+    text: "{{title}}"
+
+  - type: paragraph
+    text: "报告期间：{{date_range}}"
+
+  - type: key_values
+    title: 财务概要
+    layout: grid
+    items:
+      - label: 总收入
+        value: "{{total_revenue}}"
+      - label: 总支出
+        value: "{{total_expense}}"
+      - label: 净利润
+        value: "{{net_profit}}"
+      - label: 利润率
+        value: "{{profit_margin}}"
+
+  - type: chart
+    chartType: bar
+    title: 收支对比
+    data_source: "{{comparison_sql}}"
+    mcp: "{{mcp_name}}"
+
+  - type: chart
+    chartType: line
+    title: 利润趋势
+    data_source: "{{trend_sql}}"
+    mcp: "{{mcp_name}}"
+
+  - type: page_break
+
+  - type: heading
+    level: 2
+    text: 明细记录
+
+  - type: table
+    data_source: "{{detail_sql}}"
+    mcp: "{{mcp_name}}"
+
+  - type: paragraph
+    text: "{{summary_text}}"

@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>见智 CoWorker</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* 品牌头部 */
+    .brand-header {
+      background: rgba(255, 255, 255, 0.95);
+      padding: 12px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      z-index: 10;
+    }
+
+    .brand-logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-logo-icon {
+      width: 32px;
+      height: 32px;
+      background: linear-gradient(135deg, #3b82f6, #1e40af);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+      font-size: 16px;
+      display: none; /* 隐藏图标 */
+    }
+
+    .brand-name {
+      font-size: 18px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+
+    .brand-tagline {
+      font-size: 12px;
+      color: #64748b;
+      margin-left: 8px;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      background: #f1f5f9;
+      border-radius: 20px;
+      font-size: 12px;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #22c55e;
+      animation: pulse 2s infinite;
+    }
+
+    .status-dot.offline {
+      background: #ef4444;
+      animation: none;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    /* 主内容区 */
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    /* 激活页面 */
+    .activation-card {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+    }
+
+    .activation-title {
+      font-size: 20px;
+      font-weight: 600;
+      color: #1e293b;
+      margin-bottom: 8px;
+      text-align: center;
+    }
+
+    .activation-subtitle {
+      font-size: 14px;
+      color: #64748b;
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .input-group {
+      margin-bottom: 16px;
+    }
+
+    .input-group label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #475569;
+      margin-bottom: 6px;
+    }
+
+    .input-group input {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 14px;
+      transition: border-color 0.2s;
+    }
+
+    .input-group input:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+
+    .btn-primary {
+      width: 100%;
+      padding: 10px;
+      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    .btn-primary:hover {
+      opacity: 0.9;
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .error-message {
+      color: #ef4444;
+      font-size: 13px;
+      margin-top: 12px;
+      text-align: center;
+      display: none;
+    }
+
+    .error-message.show {
+      display: block;
+    }
+
+    /* webview 容器 (运行时显示) */
+    .webview-container {
+      display: none;
+      width: 100%;
+      height: 100%;
+      background: white;
+    }
+
+    .webview-container.show {
+      display: block;
+    }
+
+    webview {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+
+    /* 加载状态 */
+    .loading {
+      display: none;
+      text-align: center;
+      color: white;
+      font-size: 14px;
+    }
+
+    .loading.show {
+      display: block;
+    }
+
+    /* 启动过渡态：卡片为白底，需覆盖 .loading 的白色文字 */
+    #bootCard .loading {
+      color: #64748b;
+    }
+
+    .boot-spinner {
+      width: 28px;
+      height: 28px;
+      margin: 0 auto 12px;
+      border: 3px solid #e2e8f0;
+      border-top-color: #2563eb;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .boot-hint {
+      display: none;
+      margin-top: 12px;
+      font-size: 12px;
+      color: #b45309;
+      text-align: center;
+    }
+
+    .boot-hint.show {
+      display: block;
+    }
+
+    /* 日志面板 */
+    .log-panel {
+      display: none;
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 200px;
+      min-height: 100px;
+      max-height: 80vh;
+      background: #1e293b;
+      border-top: 2px solid #3b82f6;
+      z-index: 100;
+      flex-direction: column;
+      resize: none;
+      overflow: hidden;
+    }
+
+    .log-panel.show {
+      display: flex;
+    }
+
+    /* 拖动把手 */
+    .log-resize-handle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 6px;
+      background: transparent;
+      cursor: ns-resize;
+      z-index: 101;
+    }
+
+    .log-resize-handle:hover {
+      background: rgba(59, 130, 246, 0.3);
+    }
+
+    .log-resize-handle:active {
+      background: rgba(59, 130, 246, 0.5);
+    }
+
+    .log-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      padding-top: 14px; /* 为拖动把手留出空间 */
+      background: #0f172a;
+      border-bottom: 1px solid #334155;
+      user-select: none;
+    }
+
+    .log-title {
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .log-controls {
+      display: flex;
+      gap: 8px;
+    }
+
+    .log-btn {
+      padding: 4px 8px;
+      background: #334155;
+      color: #94a3b8;
+      border: none;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+    }
+
+    .log-btn:hover {
+      background: #475569;
+    }
+
+    .log-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 12px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 11px;
+      line-height: 1.4;
+      color: #cbd5e1;
+    }
+
+    .log-entry {
+      margin-bottom: 2px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .log-entry.info {
+      color: #60a5fa;
+    }
+
+    .log-entry.error {
+      color: #f87171;
+    }
+
+    .log-entry.success {
+      color: #4ade80;
+    }
+
+    .log-entry.warn {
+      color: #fbbf24;
+    }
+
+    /* 日志切换按钮 */
+    .log-toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      background: #f1f5f9;
+      border-radius: 20px;
+      font-size: 11px;
+      color: #64748b;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .log-toggle:hover {
+      background: #e2e8f0;
+    }
+
+    /* 微信登录输出 */
+    .wechat-output {
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 100px;
+      max-height: 200px;
+      overflow-y: auto;
+      margin-bottom: 16px;
+      font-family: 'Consolas', 'Monaco', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    .wechat-output-line {
+      color: #cbd5e1;
+      margin-bottom: 4px;
+      white-space: pre-wrap;
+    }
+
+    .wechat-output-error {
+      color: #f87171;
+      margin-bottom: 4px;
+    }
+
+    .wechat-output-warn {
+      color: #fbbf24;
+      margin-bottom: 4px;
+    }
+
+    .wechat-output-info {
+      color: #60a5fa;
+      margin-bottom: 4px;
+    }
+
+    .wechat-output-success {
+      color: #4ade80;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
+    /* 二维码容器 */
+    .wechat-qrcode-wrapper {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      min-height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 16px;
+    }
+
+    .wechat-qrcode-loading {
+      color: #64748b;
+      font-size: 14px;
+    }
+
+    .wechat-qrcode-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .wechat-qrcode-image {
+      width: 200px;
+      height: 200px;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 10px;
+      background: white;
+    }
+
+    .wechat-qrcode-hint {
+      margin-top: 12px;
+      color: #64748b;
+      font-size: 13px;
+      text-align: center;
+    }
+
+    /* 次要按钮 */
+    .btn-secondary {
+      padding: 10px;
+      background: #64748b;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.2s;
+      flex: 1;
+    }
+
+    .btn-secondary:hover {
+      opacity: 0.9;
+    }
+
+    .btn-secondary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .wechat-buttons {
+      display: flex;
+      gap: 10px;
+    }
+
+    .wechat-buttons .btn-primary {
+      flex: 1;
+    }
+  </style>
+</head>
+<body>
+  <!-- 品牌头部 -->
+  <header class="brand-header">
+    <div class="brand-logo">
+      <div class="brand-logo-icon">见</div>
+      <div>
+        <span class="brand-name">见智 CoWorker</span>
+        <span class="brand-tagline">企业 AI 员工</span>
+      </div>
+    </div>
+    <div class="status-indicator">
+      <span class="status-dot offline" id="statusDot"></span>
+      <span id="statusText">未连接</span>
+    </div>
+    <div class="log-toggle" id="wechatBindEntry" style="display: none;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="7" height="7"></rect>
+        <rect x="14" y="3" width="7" height="7"></rect>
+        <rect x="3" y="14" width="7" height="7"></rect>
+        <line x1="14" y1="14" x2="21" y2="21"></line>
+      </svg>
+      <span>绑定微信</span>
+    </div>
+    <div class="log-toggle" id="logToggle">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+        <polyline points="14 2 14 8 20 8"></polyline>
+        <line x1="16" y1="13" x2="8" y2="13"></line>
+        <line x1="16" y1="17" x2="8" y2="17"></line>
+        <polyline points="10 9 9 9 8 9"></polyline>
+      </svg>
+      <span>日志</span>
+    </div>
+  </header>
+
+  <!-- 日志面板 -->
+  <div class="log-panel" id="logPanel">
+    <div class="log-resize-handle" id="logResizeHandle"></div>
+    <div class="log-header">
+      <span class="log-title">本地日志</span>
+      <div class="log-controls">
+        <button class="log-btn" id="logExport">导出</button>
+        <button class="log-btn" id="logClear">清空</button>
+        <button class="log-btn" id="logClose">关闭</button>
+      </div>
+    </div>
+    <div class="log-content" id="logContent"></div>
+  </div>
+
+  <!-- 主内容区 -->
+  <main class="main-content">
+    <!-- 启动过渡态（默认可见，避免激活表单闪现） -->
+    <div class="activation-card" id="bootCard">
+      <h1 class="activation-title" id="bootTitle">正在启动</h1>
+      <p class="activation-subtitle" id="bootMessage">正在加载见智 CoWorker 运行时…</p>
+      <div class="loading show">
+        <div class="boot-spinner"></div>
+        <div id="bootDetail">请稍候</div>
+      </div>
+      <div class="boot-hint" id="bootHint">首次启动较慢，可点击右上角「日志」查看详情</div>
+    </div>
+
+    <!-- 启动失败诊断页 -->
+    <div class="activation-card" id="diagnosticCard" style="display: none;">
+      <h1 class="activation-title">启动失败</h1>
+      <p class="activation-subtitle" id="diagnosticMessage">运行时未能正常启动</p>
+
+      <div class="error-message show" id="diagnosticDetail"></div>
+
+      <button class="btn-primary" id="diagnosticRetryBtn">重试启动</button>
+      <button class="btn-secondary" id="diagnosticLogBtn" style="margin-top: 10px;">查看日志</button>
+      <button class="btn-secondary" id="diagnosticExportBtn" style="margin-top: 10px;">导出日志</button>
+      <button class="btn-secondary" id="diagnosticReactivateBtn" style="margin-top: 10px;">重新激活</button>
+    </div>
+
+    <!-- 激活卡片 -->
+    <div class="activation-card" id="activationCard" style="display: none;">
+      <h1 class="activation-title">激活见智 CoWorker</h1>
+      <p class="activation-subtitle">请输入从见智后台获取的激活码</p>
+
+      <div class="input-group">
+        <label for="mainUrl">服务器地址</label>
+        <input type="text" id="mainUrl" placeholder="https://your-jzai-instance.com" value="">
+      </div>
+
+      <div class="input-group">
+        <label for="token">激活码</label>
+        <input type="text" id="token" placeholder="请输入 12 位激活码">
+      </div>
+
+      <div class="input-group">
+        <label for="workDir">工作目录（可选）</label>
+        <div style="display: flex; gap: 8px;">
+          <input type="text" id="workDir" placeholder="留空使用默认目录" readonly>
+          <button type="button" id="selectWorkDirBtn" class="btn-secondary" style="flex: 0 0 auto; width: auto; padding: 10px 16px;">浏览...</button>
+        </div>
+        <small style="color: #64748b; font-size: 11px; margin-top: 4px; display: block;">AI员工将在此目录中读写文件</small>
+      </div>
+
+      <button class="btn-primary" id="activateBtn">激活</button>
+
+      <div class="error-message" id="errorMessage"></div>
+
+      <div class="loading" id="loading">
+        <div>正在激活...</div>
+      </div>
+    </div>
+
+    <!-- 微信登录卡片 -->
+    <div class="activation-card" id="wechatLoginCard" style="display: none;">
+      <h1 class="activation-title">微信登录</h1>
+      <p class="activation-subtitle">请使用微信扫描下方二维码完成登录</p>
+
+      <div class="wechat-output" id="wechatOutput" style="display: none;"></div>
+
+      <!-- 二维码容器 -->
+      <div class="wechat-qrcode-wrapper" id="wechatQrCodeWrapper">
+        <div class="wechat-qrcode-loading">正在生成二维码...</div>
+      </div>
+
+      <div class="wechat-buttons">
+        <button class="btn-primary" id="wechatLoginBtn">开始登录</button>
+        <button class="btn-secondary" id="wechatCancelBtn">跳过</button>
+      </div>
+
+      <p class="activation-subtitle" style="margin-top: 20px; margin-bottom: 0;">提示：登录成功后将自动进入工作台</p>
+    </div>
+
+    <!-- webview 容器 (激活后显示) -->
+    <div class="webview-container" id="webviewContainer">
+      <webview id="gatewayWebview" src="about:blank"></webview>
+    </div>
+  </main>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

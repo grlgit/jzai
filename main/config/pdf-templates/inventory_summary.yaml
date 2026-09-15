@@ -1,0 +1,52 @@
+id: inventory_summary
+name: 库存盘点
+description: 库存数据汇总报告，含分类统计和库存分布
+icon: "📦"
+
+page:
+  size: A4
+  orientation: portrait
+  margins: [40, 60, 40, 60]
+
+header:
+  left: "{{company_name}}"
+  right: "盘点日期：{{report_date}}"
+  borderBottom: true
+
+footer:
+  center: "第 {{page}} 页 / 共 {{pages}} 页"
+
+sections:
+  - type: heading
+    level: 1
+    text: "{{title}}"
+
+  - type: paragraph
+    text: "盘点时间：{{report_date}}　仓库：{{warehouse_name}}"
+
+  - type: key_values
+    title: 库存概况
+    layout: grid
+    items:
+      - label: SKU总数
+        value: "{{sku_count}}"
+      - label: 库存总量
+        value: "{{total_qty}}"
+      - label: 库存总值
+        value: "{{total_value}}"
+      - label: 缺货SKU
+        value: "{{shortage_count}}"
+
+  - type: chart
+    chartType: pie
+    title: 库存分类占比
+    data_source: "{{category_sql}}"
+    mcp: "{{mcp_name}}"
+
+  - type: heading
+    level: 2
+    text: 库存明细
+
+  - type: table
+    data_source: "{{detail_sql}}"
+    mcp: "{{mcp_name}}"

@@ -1,0 +1,12 @@
+{
+  "erp_base_url": "https://erp.example.com/api",
+  "erp_endpoint": "/orders/create",
+  "auth_type": "bearer",
+  "auth_token": "YOUR_TOKEN_HERE",
+  "timeout_seconds": 30,
+  "order_template": "default",
+  "custom_field_mapping": {},
+  "retry_on_failure": true,
+  "max_retries": 3,
+  "dry_run": true
+}

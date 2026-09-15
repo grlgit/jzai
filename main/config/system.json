@@ -1,0 +1,9 @@
+{
+  "workspaceRoot": "./workspace",
+  "knowledgeBase": {
+    "apiEndpoint": "http://localhost:8000",
+    "mcpEndpoint": "http://localhost:3011",
+    "slug": "default",
+    "workspacePath": "./workspace/knowledge_base"
+  }
+}

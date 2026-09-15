@@ -1,0 +1,51 @@
+{
+  "manifestVersion": "1.0",
+  "appId": "com.example.async-job-app",
+  "shortName": "async-job-app",
+  "nsPrefix": "aj",
+  "name": { "zh": "批量报表", "en": "Async Job App" },
+  "version": "1.0.0",
+  "description": { "zh": "异步任务模式演示：批量报表生成（创建即返回，后台推进，面板轮询进度）" },
+  "author": "Example",
+  "database": { "schemaName": "app_async_job_app", "poolMax": 3 },
+  "permissions": [
+    { "id": "aj:use", "label": { "zh": "使用批量报表" }, "default": "user" }
+  ],
+  "migrations": [
+    { "version": 1, "file": "migrations/001_create_jobs.sql" }
+  ],
+  "agents": [{ "file": "agents/aj_assistant.yaml" }],
+  "backend": {
+    "entry": "dist/backend/index.js",
+    "module": "AsyncJobModule",
+    "toolProviders": [
+      {
+        "class": "JobToolProvider",
+        "toolIds": ["aj_job_submit", "aj_job_status"],
+        "group": "报表",
+        "tokenLimits": { "default": 8000 }
+      }
+    ],
+    "controllers": [
+      {
+        "class": "JobController",
+        "handlers": [
+          "JobController.createJob",
+          "JobController.getJob",
+          "JobController.listJobs"
+        ]
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": "ajMain",
+      "name": { "zh": "批量报表" },
+      "groupName": "应用",
+      "permission": "aj:use",
+      "entryComponent": "dist/pages/JobPanel.js",
+      "agentId": "aj_assistant",
+      "keepAlive": true
+    }
+  ]
+}

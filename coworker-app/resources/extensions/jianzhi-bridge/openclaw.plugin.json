@@ -1,0 +1,24 @@
+{
+  "id": "jianzhi-bridge",
+  "name": "JianZhi Bridge",
+  "version": "1.0.0",
+  "description": "Connects OpenClaw to JianZhi main platform for LLM proxy, MCP tools, config sync, and message reporting.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["jianzhi_search_knowledge", "jianzhi_report"]
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "mainUrl": { "type": "string", "description": "JianZhi main platform URL" },
+      "token": { "type": "string", "description": "CW authentication token" },
+      "coworkerId": { "type": "string", "description": "CoWorker ID" },
+      "reportInterval": { "type": "number", "default": 30000 },
+      "configCheckInterval": { "type": "number", "default": 60000 }
+    },
+    "required": ["mainUrl", "token", "coworkerId"]
+  },
+  "enabledByDefault": false
+}

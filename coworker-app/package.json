@@ -1,0 +1,72 @@
+{
+  "name": "jzai-coworker",
+  "version": "1.0.0",
+  "description": "见智 CoWorker - 企业 AI 员工 Windows 客户端",
+  "main": "main.js",
+  "author": "见智·企业AI",
+  "license": "PROPRIETARY",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "check-env": "./check-env.sh",
+    "prepare-resources": "scripts/prepare-resources.sh",
+    "build": "./build.sh",
+    "build:win": "npm run prepare-resources && electron-builder --win nsis --x64",
+    "build:sign": "npm run prepare-resources && electron-builder --win nsis --x64 && npm run sign",
+    "generate-cert": "certificates/generate-self-signed-cert.sh",
+    "sign": "certificates/sign-windows.sh dist/见智CoWorker-Setup-x64.exe"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "electron-store": "^8.1.0"
+  },
+  "devDependencies": {
+    "electron": "28.0.0",
+    "electron-builder": "^24.6.0"
+  },
+  "build": {
+    "appId": "com.jzai.coworker",
+    "productName": "JZAI-CoWorker",
+    "artifactName": "${productName}-${version}.${ext}",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build-resources"
+    },
+    "compression": "store",
+    "asar": false,
+    "files": [
+      "main.js",
+      "renderer/**/*",
+      "!certificates/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/openclaw",
+        "to": "openclaw",
+        "filter": "**/*"
+      },
+      {
+        "from": "resources/extensions",
+        "to": "extensions",
+        "filter": "**/*"
+      },
+      {
+        "from": "resources/runtime",
+        "to": "runtime",
+        "filter": "**/*"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "electronVersion": "28.0.0",
+    "afterPack": "scripts/after-pack.js"
+  }
+}

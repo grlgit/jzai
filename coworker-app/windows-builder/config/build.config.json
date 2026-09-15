@@ -1,0 +1,33 @@
+{
+  "$schema": "../config.schema.json",
+  "openClaw": {
+    "sourcePath": "../openclaw",
+    "useSubmodule": true,
+    "fallbackDownloadUrl": "https://github.com/jzai-ai/openclaw/releases/latest"
+  },
+  "extensions": {
+    "jianzhiBridge": true,
+    "weixinPlugin": true
+  },
+  "build": {
+    "target": "portable",
+    "arch": "x64",
+    "outputDir": "../dist"
+  },
+  "signing": {
+    "enabled": true,
+    "certificatePath": "../certificates/jzai-code-signing.pfx",
+    "defaultPassword": "jzai-coworker-2026",
+    "timestampServers": [
+      "http://timestamp.digicert.com",
+      "http://timestamp.sectigo.com",
+      "http://timestamp.apple.com"
+    ]
+  },
+  "resources": {
+    "icons": [
+      "../assets/icon.ico",
+      "../assets/installer-icon.ico"
+    ]
+  }
+}

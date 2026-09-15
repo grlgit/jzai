@@ -1,0 +1,73 @@
+# ══════════ 白名单模式：默认全部忽略 ══════════
+/*
+
+# ══════════ 放行目录 ══════════
+!/.gitignore
+!/main/
+!/web/
+!/llm_wiki/
+!/coworker-app/
+
+# ══════════ 各目录内部忽略 ══════════
+# 依赖与构建产物
+node_modules/
+dist/
+.next/
+build/
+coverage/
+
+
+# 密钥与敏感
+.env
+.env.*
+*.har
+credentials.json
+credentials.enc
+coworker-app/certificates/*.crt
+coworker-app/certificates/*.key
+coworker-app/certificates/*.pfx
+coworker-app/certificates/*.pem
+coworker-app/certificates/*.srl
+
+# main 运行时数据
+main/workspace/
+!main/src/workspace/
+config/models.json
+main/test*
+main/dist_test
+main/icons
+repro_*.mjs
+repro_*.js
+
+# main 用户配置（含凭据/用户生成内容：技能、系统连接、MCP 连接配置）
+main/config/skills/
+main/config/systems/
+main/config/mcp/
+
+# coworker-app 日志（含 apiKey）
+coworker-app/jzai-logs-*.txt
+
+# llm_wiki（Python）运行时与缓存
+__pycache__/
+*.pyc
+.venv/
+llm_wiki/data/
+llm_wiki/*.db
+llm_wiki/*.sqlite*
+llm_wiki/docker*
+llm_wiki/*.md
+!llm_wiki/README.md
+
+# coworker-app 构建产物
+coworker-app/out/
+coworker-app/release/
+
+# web排除项
+web/AGENTS.md
+web/CLAUDE.md
+
+
+# 系统杂物
+.DS_Store
+._*
+*.log

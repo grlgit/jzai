@@ -1,0 +1,209 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { spawn } from 'child_process';
+import { AppManifest } from '../validators/manifest.schema';
+import { AppRegistryService } from './app-registry.service';
+import { AppLogService, AppLogEntry } from './app-log.service';
+import { AppValidatorService } from '../validators/app-validator.service';
+import { ToolBridgeService } from '../../../agent/tool-bridge/tool-bridge.service';
+import { AppCapabilityService } from './app-capability.service';
+import type { AppInstallService } from './app-install.service';
+import type { AppUpgradeService } from './app-upgrade.service';
+
+/**
+ * AppInstallService/AppUpgradeService 与 AppActivationService 存在构造期循环
+ * （activation → app-platform → install → activation）。
+ * 这两个类只能 import type + 调用时 lazy require，不可顶层 import 运行时值。
+ */
+function lazyInstall(): typeof AppInstallService {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require('./app-install.service').AppInstallService;
+}
+function lazyUpgrade(): typeof AppUpgradeService {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require('./app-upgrade.service').AppUpgradeService;
+}
+
+/**
+ * 首方运行时通道（design-app-dev-mcp §3.4 AppContext.platform）。
+ * 仅注入给声明 appstore:* 且通过首方校验的扩展包（jz-devtools）。
+ * 跨模块服务经 ModuleRef 惰性解析，避免 DI 循环。
+ */
+export interface AppPlatformFacade {
+  stageAndInstall?(
+    files: Record<string, string>,
+    config?: Record<string, unknown>,
+  ): Promise<{ appId: string; status: string }>;
+  upgrade?(appId: string, files: Record<string, string>): Promise<{ ok: true }>;
+  validatePackage?(
+    files: Record<string, string>,
+  ): Promise<{ ok: boolean; issues: Array<{ code: string; path?: string; message: string; hint?: string }> }>;
+  listPlatformTools?(): Promise<Array<{ id: string; group?: string; description?: string; source: string }>>;
+  describeTool?(toolId: string): Promise<unknown>;
+  callTool?(toolId: string, params: unknown): Promise<unknown>;
+  readLogs?(appId: string, since?: number): Promise<AppLogEntry[]>;
+}
+
+const FIRST_PARTY_APP_ID = /^com\.(jianzhi|menhu)\./;
+
+@Injectable()
+export class AppPlatformService {
+  private readonly logger = new Logger(AppPlatformService.name);
+
+  constructor(
+    private readonly moduleRef: ModuleRef,
+    private readonly registry: AppRegistryService,
+    private readonly logs: AppLogService,
+    private readonly capabilities: AppCapabilityService,
+  ) {}
+
+  /**
+   * 按 manifest 声明构建门控门面。
+   * 非首方 appId / 未声明 appstore:* → undefined（普通包拿不到平台能力）。
+   */
+  buildFacade(manifest: AppManifest): AppPlatformFacade | undefined {
+    if (!FIRST_PARTY_APP_ID.test(manifest.appId)) return undefined;
+    const caps = manifest.platformCapabilities ?? [];
+    const facade: AppPlatformFacade = {};
+
+    if (caps.includes('appstore:manage')) {
+      facade.stageAndInstall = (files, config) => this.stageAndInstall(files, config);
+      facade.upgrade = (appId, files) => this.upgradeApp(appId, files);
+      facade.validatePackage = files => this.validatePackage(files);
+      facade.listPlatformTools = () => this.listPlatformTools();
+      facade.describeTool = toolId => this.describeTool(toolId);
+      facade.callTool = (toolId, params) =>
+        this.moduleRef.get(ToolBridgeService, { strict: false }).callTool(toolId, params, undefined);
+    }
+    if (caps.includes('appstore:read-logs')) {
+      facade.readLogs = (appId, since) => Promise.resolve(this.logs.read(appId, since ?? 0));
+    }
+    return Object.keys(facade).length > 0 ? facade : undefined;
+  }
+
+  // ── 实现 ──
+
+  private async stageAndInstall(
+    files: Record<string, string>,
+    config?: Record<string, unknown>,
+  ): Promise<{ appId: string; status: string }> {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'jzdev-install-'));
+    try {
+      await this.writeFiles(dir, files);
+      const manifest = this.readManifest(dir);
+      await this.moduleRef.get(lazyInstall(), { strict: false })
+        .installFromStage(dir, config ?? {}, () => {}, {});
+      return { appId: manifest.appId, status: 'active' };
+    } finally {
+      fs.rm(dir, { recursive: true, force: true }, () => {});
+    }
+  }
+
+  private async upgradeApp(appId: string, files: Record<string, string>): Promise<{ ok: true }> {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'jzdev-upgrade-'));
+    const zipPath = path.join(os.tmpdir(), `jzdev_${Date.now()}.jzapp`);
+    try {
+      await this.writeFiles(dir, files);
+      await this.zipDir(dir, zipPath);
+      await this.moduleRef.get(lazyUpgrade(), { strict: false }).upgrade(appId, zipPath);
+      return { ok: true };
+    } finally {
+      fs.rm(dir, { recursive: true, force: true }, () => {});
+      fs.rm(zipPath, { force: true }, () => {});
+    }
+  }
+
+  private async validatePackage(
+    files: Record<string, string>,
+  ): Promise<{ ok: boolean; issues: Array<{ code: string; path?: string; message: string; hint?: string }> }> {
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'jzdev-validate-'));
+    try {
+      await this.writeFiles(dir, files);
+      const ids = await this.registry.getExistingIds();
+      const report = await this.moduleRef.get(AppValidatorService, { strict: false }).validate(
+        dir, ids.appIds, ids.shortNames, ids.nsPrefixes, ids.schemaNames, ids.panelIds, ids.toolIds,
+      );
+      const issues = [...report.criticals, ...report.warnings].map((c: any) => ({
+        code: c.code,
+        message: c.message,
+        path: c.details,
+        hint: this.hintFor(c.code),
+      }));
+      return { ok: report.passed, issues };
+    } finally {
+      fs.rm(dir, { recursive: true, force: true }, () => {});
+    }
+  }
+
+  /** 机器可读修复建议（dev agent 自纠用） */
+  private hintFor(code: string): string | undefined {
+    const hints: Record<string, string> = {
+      MISSING_MANIFEST: '在包根目录添加 manifest.json（参照 jzdev://docs/manifest-schema）',
+      INVALID_MANIFEST: '按 jzdev://docs/manifest-schema 修正字段格式',
+      DUPLICATE_APP_ID: '更换 appId（反向域名，全局唯一）',
+      DUPLICATE_SHORT_NAME: '更换 shortName',
+      DUPLICATE_NS_PREFIX: '更换 nsPrefix，并同步改所有标识符前缀',
+      AGENT_TOOL_NOT_DECLARED: '把该工具加入 manifest backend.toolProviders[].toolIds，或从 agent yaml 的 tools 中移除',
+      PLATFORM_TOOL_NOT_ALLOWED: '从 usesPlatformTools 移除该工具；仅 L1 数据生成/L2 连接器只读/L3 界面控制类可声明',
+      DEV_CAP_NOT_FIRST_PARTY: 'appstore:* 能力仅首方包可声明，请移除',
+      MCP_EXPOSE_NOT_FIRST_PARTY: 'mcpExposed 仅首方包可声明，请移除',
+      MIGRATION_VERSION_GAP: 'migrations 版本号从 1 开始连续编号',
+      MIGRATION_FILE_MISSING: '补齐迁移 SQL 文件或从 manifest.migrations 移除该条',
+      MISSING_README: '补充 README.md（≥200 字符，说明用途与配置）',
+    };
+    return hints[code];
+  }
+
+  private async listPlatformTools(): Promise<Array<{ id: string; group?: string; description?: string; source: string }>> {
+    const bridge = this.moduleRef.get(ToolBridgeService, { strict: false });
+    const catalog = bridge.getCatalog();
+    const sourceMap = await this.capabilities.getSourceMap();
+    const appTools = sourceMap.get('tool') ?? new Map();
+    return catalog.map((e: any) => {
+      const src = appTools.get(e.id ?? e.name);
+      return {
+        id: e.id ?? e.name,
+        group: e.group,
+        description: e.description,
+        source: src ? `app:${src.name}` : 'builtin',
+      };
+    });
+  }
+
+  private async describeTool(toolId: string): Promise<unknown> {
+    const all = await this.listPlatformTools();
+    const found = all.find(t => t.id === toolId);
+    if (!found) throw new Error(`Tool not found: ${toolId}`);
+    const bridge = this.moduleRef.get(ToolBridgeService, { strict: false });
+    const full = bridge.getCatalog().find((e: any) => (e.id ?? e.name) === toolId);
+    return { ...found, parameters: (full as any)?.parameters ?? null };
+  }
+
+  // ── 工具方法 ──
+
+  private async writeFiles(dir: string, files: Record<string, string>): Promise<void> {
+    for (const [rel, content] of Object.entries(files)) {
+      const target = path.resolve(dir, rel);
+      if (!target.startsWith(path.resolve(dir) + path.sep)) {
+        throw new Error(`Illegal file path: ${rel}`);
+      }
+      await fs.promises.mkdir(path.dirname(target), { recursive: true });
+      await fs.promises.writeFile(target, content);
+    }
+  }
+
+  private readManifest(dir: string): AppManifest {
+    return JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf-8'));
+  }
+
+  private zipDir(dir: string, out: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const zip = spawn('zip', ['-qry', out, '.', '-x', '._*', '*/._*', '.DS_Store', '*/.DS_Store'], { cwd: dir });
+      zip.on('close', code => (code === 0 ? resolve() : reject(new Error(`zip exited ${code}`))));
+      zip.on('error', reject);
+    });
+  }
+}

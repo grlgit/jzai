@@ -1,0 +1,62 @@
+{
+  "eval_id": 2,
+  "eval_name": "zara-shirt-offset-header",
+  "prompt": "这个是ZARA的衬衫PO单 /Users/greale/llm_wiki/GarmentOrderProcessing-workspace/test-data/order_zara_shirt.xlsx ，帮我录到ERP系统里，记得查一下衬衫的车缝和包装标准",
+  "assertions": [
+    {
+      "id": "a2_style_no",
+      "text": "正确提取款号 ZR-SH-5501",
+      "type": "contains",
+      "target": "erp_order.json",
+      "expected": "ZR-SH-5501"
+    },
+    {
+      "id": "a2_total_qty",
+      "text": "总数量正确为6850",
+      "type": "contains",
+      "target": "erp_order.json",
+      "expected": "6850"
+    },
+    {
+      "id": "a2_three_colors",
+      "text": "识别全部3个颜色（白色WHT、浅蓝LBL、粉色PNK）",
+      "type": "contains_all",
+      "target": "erp_order.json",
+      "expected": ["WHT", "LBL", "PNK"]
+    },
+    {
+      "id": "a2_delivery_date",
+      "text": "正确提取交期 2025-07-20",
+      "type": "contains",
+      "target": "erp_order.json",
+      "expected": "2025-07-20"
+    },
+    {
+      "id": "a2_port",
+      "text": "正确提取提货港（深圳蛇口）",
+      "type": "contains_any",
+      "target": "erp_order.json",
+      "expected": ["蛇口", "深圳"]
+    },
+    {
+      "id": "a2_customer_zara",
+      "text": "正确识别客户为ZARA/Inditex",
+      "type": "contains_any",
+      "target": "erp_order.json",
+      "expected": ["Zara", "ZARA", "Inditex"]
+    },
+    {
+      "id": "a2_sewing_query",
+      "text": "查询了衬衫车缝标准",
+      "type": "contains_any",
+      "target": "summary.md",
+      "expected": ["车缝", "sewing", "缝制"]
+    },
+    {
+      "id": "a2_erp_json_valid",
+      "text": "输出了有效的ERP订单JSON文件",
+      "type": "file_exists",
+      "target": "erp_order.json"
+    }
+  ]
+}

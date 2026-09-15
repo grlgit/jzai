@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>见智数据仪表 OEM 嵌入 — Demo</title>
+  <style>
+    body { font: 14px/1.6 system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #222; }
+    header { background: #1677ff; color: #fff; padding: 14px 24px; font-size: 16px; }
+    main { max-width: 1000px; margin: 24px auto; padding: 0 16px; }
+    .card { background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.06); margin-bottom: 16px; }
+    label { font-weight: 600; display: block; margin-bottom: 6px; }
+    input { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-family: monospace; }
+    button { background: #1677ff; color: #fff; border: 0; border-radius: 6px; padding: 9px 18px; cursor: pointer; margin-top: 10px; }
+    .hint { color: #888; font-size: 12px; margin-top: 6px; }
+    #dash { min-height: 420px; }
+  </style>
+</head>
+<body>
+  <!-- 这是“第三方系统”自己的页面外壳 -->
+  <header>🏭 客户 ERP 系统（演示外壳）</header>
+  <main>
+    <div class="card">
+      <label>OEM 访问令牌（token）</label>
+      <input id="token" placeholder="粘贴宿主后端 /api/oem/token 返回的 token">
+      <p class="hint">
+        正式集成中此 token 由客户后端用 app_id + app_secret 调
+        <code>POST /api/oem/token</code> 换取（secret 不进浏览器）。此处仅为手动演示。
+      </p>
+      <label style="margin-top:12px">嵌入模式</label>
+      <select id="view" style="padding:8px;border:1px solid #ddd;border-radius:6px">
+        <option value="full">full — 对话出图 + 完整数据大师面板（W2）</option>
+        <option value="dashboard">dashboard — 只读仪表盘（W1）</option>
+      </select>
+      <br>
+      <button onclick="mount()">嵌入数据仪表</button>
+    </div>
+    <div class="card">
+      <div id="dash"></div>
+    </div>
+  </main>
+
+  <script src="/oem/sdk.js"></script>
+  <script>
+    var handle = null;
+    function mount() {
+      var token = document.getElementById('token').value.trim();
+      if (!token) { alert('请先填入 token'); return; }
+      if (handle) handle.destroy();
+      handle = JianzhiDashboard.embed('#dash', {
+        token: token,
+        view: document.getElementById('view').value,
+        theme: { primary: '1677ff' },
+        onReady: function () { console.log('[demo] 嵌入就绪'); },
+        onResize: function (h) { console.log('[demo] 高度自适应', h); },
+        onTokenExpired: function () {
+          alert('token 已过期，请重新换取');
+          return null;
+        },
+      });
+    }
+  </script>
+</body>
+</html>

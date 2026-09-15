@@ -1,0 +1,71 @@
+id: sales_report
+name: 销售报告
+description: 按时间段生成销售数据报告，含趋势图和明细表
+icon: "📊"
+
+page:
+  size: A4
+  orientation: portrait
+  margins: [40, 60, 40, 60]
+
+header:
+  left: "{{company_name}}"
+  right: "{{report_date}}"
+  logo: true
+  borderBottom: true
+
+footer:
+  center: "第 {{page}} 页 / 共 {{pages}} 页"
+  right: "机密文件"
+
+styles:
+  title:
+    fontSize: 22
+    bold: true
+    color: "#1a1a2e"
+    alignment: center
+    margin: [0, 0, 0, 20]
+  subtitle:
+    fontSize: 14
+    color: "#666"
+    alignment: center
+
+sections:
+  - type: heading
+    level: 1
+    text: "{{title}}"
+
+  - type: paragraph
+    text: "报告期间：{{date_range}}"
+
+  - type: key_values
+    title: 核心指标
+    layout: grid
+    items:
+      - label: 总销售额
+        value: "{{total_sales}}"
+      - label: 订单数
+        value: "{{order_count}}"
+      - label: 客户数
+        value: "{{customer_count}}"
+      - label: 同比增长
+        value: "{{growth_rate}}"
+
+  - type: chart
+    chartType: line
+    title: 销售趋势
+    data_source: "{{trend_sql}}"
+    mcp: "{{mcp_name}}"
+
+  - type: page_break
+
+  - type: heading
+    level: 2
+    text: 销售明细
+
+  - type: table
+    data_source: "{{detail_sql}}"
+    mcp: "{{mcp_name}}"
+
+  - type: paragraph
+    text: "{{summary_text}}"

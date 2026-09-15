@@ -1,0 +1,52 @@
+name: "ERP订单导入模板"
+description: "将PDF/Excel订单数据映射为ERP系统的订单字段"
+
+# 来源字段 → 目标字段映射
+# source: 附件中可能出现的字段名（多别名）
+# target: RPA Skill中使用的标准字段名
+field_mapping:
+  - source: ["Order No", "订单号", "PO No", "PO Number", "采购订单号"]
+    target: orderNo
+  - source: ["Buyer", "客户", "客户名称", "Customer", "买方"]
+    target: customer
+  - source: ["Style Name", "产品", "款号", "Product", "品名", "Garment Description"]
+    target: product
+  - source: ["Total Order Quantity", "数量", "Qty", "Quantity", "订购数量", "总数量"]
+    target: quantity
+  - source: ["Unit Price", "单价", "Price", "Component Unit Price", "Buying Price"]
+    target: price
+  - source: ["currency", "币种", "Currency"]
+    target: currency
+  - source: ["Exfactory Date", "交期", "Delivery Date", "交货日期", "出厂日期"]
+    target: deliveryDate
+  - source: ["Season", "季节"]
+    target: season
+  - source: ["Supplier", "供应商", "Supplier Code"]
+    target: supplier
+  - source: ["Payment Type", "付款方式", "Payment"]
+    target: paymentType
+  - source: ["Total Amount", "总金额", "Total"]
+    target: totalAmount
+  - source: ["Fabric", "面料", "Main Fabric"]
+    target: fabric
+
+# 数据清洗规则
+transforms:
+  quantity:
+    type: number
+    remove: [",", " ", "台", "个", "件", "套", "pcs"]
+  price:
+    type: number
+    remove: [",", " ", "¥", "$", "USD", "元"]
+    pattern: "([\\d.]+)"
+  totalAmount:
+    type: number
+    remove: [",", " ", "USD", "EUR", "CNY"]
+    pattern: "([\\d.]+)"
+
+# 必填字段
+required: [customer, product, quantity]
+
+# 默认值
+defaults:
+  currency: "USD"

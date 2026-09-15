@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Electron
+out/
+*.app
+*.exe
+*.dmg
+
+# Certificates - NEVER commit private keys
+certificates/*.crt
+certificates/*.key
+certificates/*.pfx
+certificates/*.pem
+certificates/*.srl
+!certificates/*.sh
+!certificates/*.md
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary
+tmp/
+temp/
+*.tmp

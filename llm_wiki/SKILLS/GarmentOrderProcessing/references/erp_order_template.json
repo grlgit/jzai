@@ -1,0 +1,31 @@
+{
+  "order_header": {
+    "po_number": "",
+    "style_no": "",
+    "customer": "",
+    "brand": "",
+    "category": "",
+    "delivery_date": "",
+    "port": "",
+    "total_qty": 0,
+    "currency": "",
+    "unit_price": 0,
+    "remarks": ""
+  },
+  "order_lines": [
+    {
+      "color": "",
+      "color_code": "",
+      "size": "",
+      "qty": 0
+    }
+  ],
+  "production_specs": {
+    "sewing": {},
+    "packaging": {},
+    "labels": {},
+    "samples": {},
+    "quality": {},
+    "materials": {}
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "jianzhi-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "JianZhi Bridge — forwards OpenClaw agent events to 见智 for audit, plus heartbeat/config sync.",
+  "openclaw": {
+    "extensions": ["./plugin.js"]
+  }
+}

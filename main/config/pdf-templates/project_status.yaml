@@ -1,0 +1,59 @@
+id: project_status
+name: 项目状态报告
+description: 项目进展报告，含里程碑、进度和问题追踪
+icon: "📋"
+
+page:
+  size: A4
+  orientation: portrait
+  margins: [40, 60, 40, 60]
+
+header:
+  left: "{{company_name}}"
+  right: "{{report_date}}"
+  borderBottom: true
+
+footer:
+  center: "第 {{page}} 页 / 共 {{pages}} 页"
+
+sections:
+  - type: heading
+    level: 1
+    text: "{{title}}"
+
+  - type: paragraph
+    text: "项目：{{project_name}}　报告日期：{{report_date}}"
+
+  - type: key_values
+    title: 项目概况
+    layout: grid
+    items:
+      - label: 总体进度
+        value: "{{overall_progress}}"
+      - label: 计划完成
+        value: "{{planned_end}}"
+      - label: 未解决问题
+        value: "{{open_issues}}"
+      - label: 已完成里程碑
+        value: "{{completed_milestones}}"
+
+  - type: chart
+    chartType: bar
+    title: 各阶段进度
+    data_source: "{{progress_sql}}"
+    mcp: "{{mcp_name}}"
+
+  - type: heading
+    level: 2
+    text: 问题与风险
+
+  - type: table
+    data_source: "{{issues_sql}}"
+    mcp: "{{mcp_name}}"
+
+  - type: heading
+    level: 2
+    text: 下一步计划
+
+  - type: paragraph
+    text: "{{next_steps}}"

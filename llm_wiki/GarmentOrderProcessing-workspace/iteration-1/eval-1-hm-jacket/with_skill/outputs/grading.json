@@ -1,0 +1,47 @@
+{
+  "eval_id": 1,
+  "eval_name": "hm-jacket-standard-format",
+  "variant": "with_skill",
+  "expectations": [
+    {
+      "text": "正确提取款号 HM-JK-2025-A003",
+      "passed": true,
+      "evidence": "Found: 'HM-JK-2025-A003' in erp_order.json"
+    },
+    {
+      "text": "总数量正确为7930",
+      "passed": true,
+      "evidence": "Found: '7930' in erp_order.json"
+    },
+    {
+      "text": "识别全部4个颜色（黑色、深蓝、军绿、灰色）",
+      "passed": true,
+      "evidence": "Found: ['BLK', 'NVY', 'OLV', 'GRY']"
+    },
+    {
+      "text": "正确提取交期 2025-08-15",
+      "passed": true,
+      "evidence": "Found: '2025-08-15' in erp_order.json"
+    },
+    {
+      "text": "正确提取提货港（上海港）",
+      "passed": true,
+      "evidence": "Found: ['上海', 'Shanghai']"
+    },
+    {
+      "text": "查询了Wiki知识库获取生产标准",
+      "passed": true,
+      "evidence": "File exists: summary.md"
+    },
+    {
+      "text": "输出了有效的ERP订单JSON文件",
+      "passed": true,
+      "evidence": "File exists: erp_order.json"
+    },
+    {
+      "text": "order_lines展开为颜色×尺码的明细行",
+      "passed": true,
+      "evidence": "Found: 'order_lines' in erp_order.json"
+    }
+  ]
+}

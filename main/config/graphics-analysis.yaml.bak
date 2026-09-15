@@ -1,0 +1,60 @@
+# PDF图形分析配置
+# 用于尺寸标注识别的图形环境分析参数
+# 优化重点：依赖线条特征而非箭头检测（PDF中箭头不可靠检测）
+
+# 搜索半径（像素）- 在文本周围搜索图形特征的范围
+searchRadius: 50
+
+# 细线阈值（像素）- 小于此宽度的线条被认为是细线（尺寸线通常是细线）
+thinLineThreshold: 3
+
+# 短线阈值（像素）- 小于此长度的线条被认为是短线（可能是箭头）
+shortLineThreshold: 100
+
+# 置信度权重 - 重点提升线条特征权重
+confidenceWeights:
+  # 附近有细线的置信度提升（提高）
+  nearbyThinLines: 0.4
+  # 有水平和垂直线条的置信度提升（提高）
+  horizontalVerticalLines: 0.3
+  # 附近有端点（箭头）的置信度提升（降低）
+  nearbyEndpoints: 0.05
+  # 周围线条密集的置信度提升（提高）
+  denseLines: 0.15
+
+# 特征检测阈值 - 降低阈值，提高敏感度
+featureThresholds:
+  # 触发"附近有细线"特征的最少细线数量（降低）
+  minThinLines: 1
+  # 触发"有水平和垂直线条"的最少线条数量
+  minHorizontalVertical: 1
+  # 触发"附近有端点"的最少端点数量（降低）
+  minEndpoints: 1
+  # 触发"周围线条密集"的最少线条数量（降低）
+  minDenseLines: 2
+
+# 箭头检测参数 - 暂时禁用（PDF中箭头无法可靠检测）
+arrowDetection:
+  enabled: false
+  # 箭头最大尺寸（像素）
+  maxArrowSize: 20
+  # 箭头最小尺寸（像素）
+  minArrowSize: 3
+  # 箭头角度容差（度）
+  angleTolerance: 15
+  # 箭头类型
+  types:
+    triangular: true   # 三角形箭头
+    open: true          # 开口箭头
+    solid: true         # 实心箭头
+    dot: false          # 圆点箭头
+
+# 尺寸线分析参数 - 放宽参数，提高检测率
+dimensionLineAnalysis:
+  enabled: true
+  # 尺寸线最小长度（像素）- 降低
+  minDimensionLineLength: 5
+  # 尺寸线最大长度（像素）
+  maxDimensionLineLength: 1000
+  # 文本与尺寸线最大距离（像素）- 增大
+  maxTextToLineDistance: 50

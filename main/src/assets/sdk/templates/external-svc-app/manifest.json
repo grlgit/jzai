@@ -1,0 +1,81 @@
+{
+  "manifestVersion": "1.0",
+  "appId": "com.example.external-svc-app",
+  "shortName": "external-svc-app",
+  "nsPrefix": "es",
+  "name": { "zh": "生产排程", "en": "External Service App" },
+  "version": "1.0.0",
+  "description": { "zh": "外部服务模式演示：CP-SAT 约束求解生产排程（外部求解伴侣服务 + LLM 交互式调优）" },
+  "author": "Example",
+  "database": { "schemaName": "app_external_svc", "poolMax": 3 },
+  "permissions": [
+    { "id": "es:use", "label": { "zh": "使用生产排程" }, "default": "user" }
+  ],
+  "configSchema": {
+    "fields": [
+      {
+        "key": "solverEndpoint",
+        "type": "string",
+        "label": { "zh": "求解服务地址" },
+        "required": true,
+        "default": "http://sched-solver:8100"
+      },
+      {
+        "key": "solverApiKey",
+        "type": "secret",
+        "label": { "zh": "求解服务密钥" },
+        "required": true
+      }
+    ]
+  },
+  "usesPlatformTools": ["mcp", "generate_pdf", "dashboard_widget"],
+  "migrations": [
+    { "version": 1, "file": "migrations/001_init.sql" }
+  ],
+  "agents": [{ "file": "agents/es_planner.yaml" }],
+  "backend": {
+    "entry": "dist/backend/index.js",
+    "module": "ScheduleModule",
+    "toolProviders": [
+      {
+        "class": "ScheduleToolProvider",
+        "toolIds": ["es_submit", "es_metrics", "es_whatif", "es_impact", "es_apply"],
+        "group": "生产排程",
+        "tokenLimits": { "es_metrics": 20000, "es_impact": 20000, "default": 8000 }
+      }
+    ],
+    "controllers": [
+      {
+        "class": "ScheduleController",
+        "handlers": [
+          "ScheduleController.createJob",
+          "ScheduleController.getJob",
+          "ScheduleController.previewImpact",
+          "ScheduleController.applyResult",
+          "ScheduleController.listOrders",
+          "ScheduleController.confirmOrders",
+          "ScheduleController.syncResources"
+        ]
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": "esMain",
+      "name": { "zh": "生产排程" },
+      "groupName": "应用",
+      "permission": "es:use",
+      "entryComponent": "dist/pages/SchedulePanel.js",
+      "agentId": "es_planner",
+      "keepAlive": true
+    }
+  ],
+  "agentDelegation": [
+    {
+      "targetAgent": "es_planner",
+      "keywords": ["排程", "排产", "插单", "交期"],
+      "fromAgent": "main",
+      "description": "生产排程规划与调整（扩展包）"
+    }
+  ]
+}

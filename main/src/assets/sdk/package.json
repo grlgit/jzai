@@ -1,0 +1,14 @@
+{
+  "name": "jz-sdk",
+  "version": "1.0.0",
+  "private": true,
+  "description": "见智 APP 开发 SDK — 类型、构建脚本、面板助手与模板",
+  "scripts": {
+    "build": "node build.mjs",
+    "package": "node package-app.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.24.2",
+    "typescript": "^5.9.3"
+  }
+}

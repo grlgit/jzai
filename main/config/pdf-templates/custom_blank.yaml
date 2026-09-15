@@ -1,0 +1,24 @@
+id: custom_blank
+name: 空白模板
+description: 空白文档模板，自由组装内容区块
+icon: "📝"
+
+page:
+  size: A4
+  orientation: portrait
+  margins: [40, 60, 40, 60]
+
+header:
+  left: "{{company_name}}"
+  right: "{{report_date}}"
+
+footer:
+  center: "第 {{page}} 页 / 共 {{pages}} 页"
+
+sections:
+  - type: heading
+    level: 1
+    text: "{{title}}"
+
+  - type: paragraph
+    text: "{{content}}"
