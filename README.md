@@ -86,4 +86,5 @@ cd web && npm run lint       # 前端 ESLint
 
 「见智」及相关标识为许可方商标，BSL 许可证不构成商标使用授权。
 
-## 联系作者：grldsrw@yahoo.com
+## 联系作者：
+grldsrw@yahoo.com
