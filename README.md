@@ -23,12 +23,12 @@ coworker-app (Electron)  →  web (Next.js)  →  main (NestJS + PostgreSQL + Re
                                           llm_wiki (FastAPI 知识库服务)
 ```
 
-| 目录 | 说明 | 技术栈 |
-|------|------|--------|
-| `main/` | 平台后端（API / 智能体运行时 / 扩展包框架） | NestJS 11 · Node 22 · PostgreSQL · socket.io |
-| `web/` | 主台前端 | Next.js 16 · React 19 · Tailwind CSS 4 |
-| `llm_wiki/` | 企业心智知识库服务 | FastAPI · SQLite/PostgreSQL · 向量检索 |
-| `coworker-app/` | AI 员工桌面端 | Electron · electron-builder |
+| 目录            | 说明                                        | 技术栈                                       |
+| --------------- | ------------------------------------------- | -------------------------------------------- |
+| `main/`         | 平台后端（API / 智能体运行时 / 扩展包框架） | NestJS 11 · Node 22 · PostgreSQL · socket.io |
+| `web/`          | 主台前端                                    | Next.js 16 · React 19 · Tailwind CSS 4       |
+| `llm_wiki/`     | 企业心智知识库服务                          | FastAPI · SQLite/PostgreSQL · 向量检索       |
+| `coworker-app/` | AI 员工桌面端                               | Electron · electron-builder                  |
 
 ## 快速开始（开发环境）
 
@@ -75,7 +75,7 @@ cd web && npm run lint       # 前端 ESLint
 
 要点：
 
-- **许可方（Licensor）**：见智（menhu.ai）
+- **许可方（Licensor）**：见智（jzai.io）
 - **附加使用授权（Additional Use Grant）**：允许为**企业内部业务目的**在生产环境使用；**不得**将本软件以托管服务（SaaS）形式向第三方提供
 - **变更日期（Change Date）**：每个版本发布满 **4 年** 之日
 - **变更许可证（Change License）**：变更日期起该版本转为 **Apache License 2.0**
@@ -85,3 +85,5 @@ cd web && npm run lint       # 前端 ESLint
 ## 商标
 
 「见智」及相关标识为许可方商标，BSL 许可证不构成商标使用授权。
+
+## 联系作者：grldsrw@yahoo.com

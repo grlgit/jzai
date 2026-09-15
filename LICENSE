@@ -1,20 +1,20 @@
 Business Source License 1.1
 
-Licensor:                  见智（menhu.ai）
+Licensor: 见智（jzai.io）
 
-Licensed Work:             见智·企业AI（JianZhi Enterprise AI），
-                           包含本仓库中的全部源代码与文档。
+Licensed Work: 见智·企业AI（JianZhi Enterprise AI），
+包含本仓库中的全部源代码与文档。
 
-Additional Use Grant:      允许为被许可方企业内部业务目的在生产环境
-                           使用本软件；未经 Licensor 书面许可，不得将
-                           本软件的全部或部分以托管服务（SaaS）形式
-                           向第三方提供。
+Additional Use Grant: 允许为被许可方企业内部业务目的在生产环境
+使用本软件；未经 Licensor 书面许可，不得将
+本软件的全部或部分以托管服务（SaaS）形式
+向第三方提供。
 
-Change Date:               本软件每个版本首次公开发布之日起满 4 年之日。
+Change Date: 本软件每个版本首次公开发布之日起满 4 年之日。
 
-Change License:            Apache License, Version 2.0
+Change License: Apache License, Version 2.0
 
-------------------------------------------------------------------------
+---
 
 Business Source License 1.1
 
@@ -71,7 +71,7 @@ to damages for loss of goodwill, work stoppage, computer failure or
 malfunction, or any and all other commercial damages or losses), even if
 the Licensor has been advised of the possibility of such damages.
 
-------------------------------------------------------------------------
+---
 
 注意：本文件中的四个变量（Licensor / Licensed Work / Additional Use
 Grant / Change Date / Change License）由许可方设定。BSL 1.1 原文参见
