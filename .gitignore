@@ -3,6 +3,8 @@
 
 # ══════════ 放行目录 ══════════
 !/.gitignore
+!/README.md
+!/LICENSE
 !/main/
 !/web/
 !/llm_wiki/

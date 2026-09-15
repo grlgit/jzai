@@ -1,0 +1,78 @@
+Business Source License 1.1
+
+Licensor:                  见智（menhu.ai）
+
+Licensed Work:             见智·企业AI（JianZhi Enterprise AI），
+                           包含本仓库中的全部源代码与文档。
+
+Additional Use Grant:      允许为被许可方企业内部业务目的在生产环境
+                           使用本软件；未经 Licensor 书面许可，不得将
+                           本软件的全部或部分以托管服务（SaaS）形式
+                           向第三方提供。
+
+Change Date:               本软件每个版本首次公开发布之日起满 4 年之日。
+
+Change License:            Apache License, Version 2.0
+
+------------------------------------------------------------------------
+
+Business Source License 1.1
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create
+derivative works, redistribute, and make non-production use of the
+Licensed Work. The Licensor may make an Additional Use Grant, above,
+permitting limited production use.
+
+Effective on the Change Date, or the fourth anniversary of the first
+publicly available distribution of a specific version of the Licensed
+Work under this License, whichever comes first, the Licensor hereby
+grants you rights under the terms of the Change License, and the rights
+granted in the paragraph above terminate.
+
+If your use of the Licensed Work does not comply with the requirements
+currently in effect as described in this License, you must purchase a
+commercial license from the Licensor, its affiliates, or its authorized
+resellers, or you must refrain from using the Licensed Work.
+
+All copies of the original and modified Licensed Work, and derivative
+works of the Licensed Work, are subject to this License. This License
+applies separately to each version of the Licensed Work and the Change
+Date may vary for each version of the Licensed Work released by the
+Licensor.
+
+You must conspicuously display this License on each original or modified
+copy of the Licensed Work. If you receive the Licensed Work in original
+or modified form from a third party, the terms of this License apply to
+your use of that work.
+
+Any use of the Licensed Work in violation of this License will
+automatically terminate your rights under this License for the current
+and all other versions of the Licensed Work.
+
+This License does not grant you any right in any trademark or logo of
+the Licensor or its affiliates.
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED
+ON AN "AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND
+CONDITIONS, EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION)
+WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
+NON-INFRINGEMENT, AND TITLE.
+
+Limitation of Liability. In no event and under no legal theory, whether
+in tort (including negligence), contract, or otherwise, unless required
+by applicable law (such as deliberate and grossly negligent acts) or
+agreed to in writing, shall the Licensor be liable to you for damages,
+including any direct, indirect, special, incidental, or consequential
+damages of any character arising as a result of this License or out of
+the use or inability to use the Licensed Work (including but not limited
+to damages for loss of goodwill, work stoppage, computer failure or
+malfunction, or any and all other commercial damages or losses), even if
+the Licensor has been advised of the possibility of such damages.
+
+------------------------------------------------------------------------
+
+注意：本文件中的四个变量（Licensor / Licensed Work / Additional Use
+Grant / Change Date / Change License）由许可方设定。BSL 1.1 原文参见
+https://mariadb.com/bsl11
