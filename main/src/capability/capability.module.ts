@@ -26,6 +26,7 @@ import { ConnectorToolProvider } from './connector/connector.tools';
     ToolAdapterService,
     McpAdapterService,
     ConnectorToolProvider,
+    McpRegistryModule,
   ],
 })
 export class CapabilityModule {}

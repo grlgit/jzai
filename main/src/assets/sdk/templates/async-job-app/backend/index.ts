@@ -46,7 +46,7 @@ class JobToolProvider implements ToolProvider {
 
   async createTools(_ctx: ToolContext): Promise<ToolInstance[]> {
     const queryStatus = async (jobId: string) => {
-      const [job] = await this.app.query(
+      const { rows: [job] } = await this.app.query(
         `SELECT id, type, status, progress, result FROM aj_jobs WHERE id=$1`, [jobId],
       );
       return job ?? { error: 'job not found' };
@@ -90,7 +90,7 @@ class JobController {
 
   async getJob(body: { jobId?: string }) {
     if (!body?.jobId) throw new Error('jobId 不能为空');
-    const [job] = await this.app.query(
+    const { rows: [job] } = await this.app.query(
       `SELECT id, type, status, progress, result, created_at, finished_at
        FROM aj_jobs WHERE id=$1`, [body.jobId],
     );
@@ -98,7 +98,7 @@ class JobController {
   }
 
   async listJobs(_body: unknown) {
-    const jobs = await this.app.query(
+    const { rows: jobs } = await this.app.query(
       `SELECT id, type, status, progress, created_at, finished_at
        FROM aj_jobs ORDER BY created_at DESC LIMIT 20`,
     );

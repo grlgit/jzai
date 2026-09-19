@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
+import { execFileSync } from 'child_process';
 import { AppManifest, AppManifestSchema } from './manifest.schema';
 
 export type CheckLevel = 'critical' | 'warning';
@@ -102,16 +103,11 @@ export class AppValidatorService {
       return this.buildReport(results, undefined);
     }
 
-    // Check zip path traversal (already extracted — check filenames)
-    const allFiles = this.listAllFiles(extractDir);
-    const traversalFile = allFiles.find(f => f.includes('..'));
-    if (traversalFile) {
-      check(1, 'critical', 'PATH_TRAVERSAL', `Zip entry contains path traversal: ${traversalFile}`);
-    }
-
-    // Size checks
-    const totalSize = allFiles.reduce((sum, f) => {
-      try { return sum + fs.statSync(f).size; } catch { return sum; }
+    // Defense in depth for directories supplied by Dev MCP or legacy callers that bypass archive extraction.
+    const allFiles = this.inspectPackageTree(extractDir, (code, message, details) =>
+      check(1, 'critical', code, message, details));
+    const totalSize = allFiles.reduce((sum, file) => {
+      try { return sum + fs.lstatSync(file).size; } catch { return sum; }
     }, 0);
     if (totalSize > 200 * 1024 * 1024) {
       check(1, 'critical', 'PKG_TOO_LARGE', `Package size ${(totalSize / 1024 / 1024).toFixed(1)}MB exceeds 200MB limit`);
@@ -138,6 +134,22 @@ export class AppValidatorService {
 
     const { appId, shortName, nsPrefix } = manifest;
     const schemaName = manifest.database?.schemaName;
+
+    // ── Check 2.5: Manifest reference closure and static backend contract ──
+    this.validateManifestReferences(extractDir, manifest, (code, message, details) =>
+      check(2, 'critical', code, message, details));
+
+    // ── Check 16: 伴随服务声明建议项（WARNING，PLAT-016）──
+    for (const svc of manifest.services ?? []) {
+      if (svc.runtime === 'process' && svc.resources) {
+        check(16, 'warning', 'SERVICE_RESOURCES_IGNORED',
+          `service ${svc.id}: resources 配额仅 container 形态可强制，process 形态将忽略`, svc.id);
+      }
+      if (svc.runtime === 'container' && svc.command?.length) {
+        check(16, 'warning', 'SERVICE_COMMAND_IGNORED',
+          `service ${svc.id}: container 形态下 command 仅覆盖容器入口，确认与镜像 ENTRYPOINT 语义一致`, svc.id);
+      }
+    }
 
     // ── Check 3: Uniqueness ──
     if (existingAppIds.has(appId)) {
@@ -181,6 +193,22 @@ export class AppValidatorService {
     for (const perm of manifest.permissions ?? []) {
       if (!perm.id.startsWith(`${nsPrefix}:`)) {
         check(4, 'critical', 'PERM_NS_VIOLATION', `Permission id "${perm.id}" must start with nsPrefix "${nsPrefix}:"`);
+      }
+    }
+    // 细粒度权限引用闭包：tool/handler 声明的 permissionId 必须在 manifest.permissions 中声明
+    const declaredPermIds = new Set((manifest.permissions ?? []).map(p => p.id));
+    for (const tp of manifest.backend?.toolProviders ?? []) {
+      for (const [toolId, permId] of Object.entries(tp.permissions ?? {})) {
+        if (!declaredPermIds.has(permId)) {
+          check(4, 'critical', 'PERM_REF_UNKNOWN', `Tool "${toolId}" references undeclared permission "${permId}"`);
+        }
+      }
+    }
+    for (const controller of manifest.backend?.controllers ?? []) {
+      for (const [handler, permId] of Object.entries(controller.permissions ?? {})) {
+        if (!declaredPermIds.has(permId)) {
+          check(4, 'critical', 'PERM_REF_UNKNOWN', `Handler "${handler}" references undeclared permission "${permId}"`);
+        }
       }
     }
     // Non-ASCII check on identifiers
@@ -334,27 +362,25 @@ export class AppValidatorService {
         `mcpExposed requires a first-party appId (com.jianzhi.* / com.menhu.*), got "${manifest.appId}"`);
     }
 
-    // ── Check 11: Agent tool reference consistency ──
-    const agentsDir = path.join(extractDir, 'agents');
-    if (fs.existsSync(agentsDir)) {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const yaml = require('js-yaml');
-      const yamlFiles = fs.readdirSync(agentsDir).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'));
-      for (const yf of yamlFiles) {
-        try {
-          const raw = yaml.load(fs.readFileSync(path.join(agentsDir, yf), 'utf-8')) as any;
-          const agentDef = raw?.agent || raw;
-          const tools: string[] = agentDef?.tools ?? [];
-          for (const tool of tools) {
-            if (tool.startsWith(`${nsPrefix}_`) && !allToolIds.includes(tool)) {
-              check(11, 'critical', 'AGENT_TOOL_NOT_DECLARED',
-                `Agent "${agentDef.id}" references tool "${tool}" which is not declared in manifest toolProviders`);
-            }
+    // ── Check 11: Declared agent YAML and tool reference consistency ──
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const yaml = require('js-yaml');
+    for (const agent of manifest.agents ?? []) {
+      const resolved = this.resolveReference(extractDir, agent.file, 'file');
+      if (!resolved.path) continue;
+      try {
+        const raw = yaml.load(fs.readFileSync(resolved.path, 'utf-8')) as any;
+        const agentDef = raw?.agent || raw;
+        const tools: string[] = agentDef?.tools ?? [];
+        for (const tool of tools) {
+          if (tool.startsWith(`${nsPrefix}_`) && !allToolIds.includes(tool)) {
+            check(11, 'critical', 'AGENT_TOOL_NOT_DECLARED',
+              `Agent "${agentDef.id}" references tool "${tool}" which is not declared in manifest toolProviders`);
           }
-        } catch (err: any) {
-          check(11, 'critical', 'AGENT_YAML_PARSE_ERROR',
-            `Failed to parse agent YAML ${yf}: ${err.message}`);
         }
+      } catch (err: any) {
+        check(11, 'critical', 'AGENT_YAML_PARSE_ERROR',
+          `Failed to parse agent YAML ${agent.file}: ${err.message}`);
       }
     }
 
@@ -368,22 +394,12 @@ export class AppValidatorService {
         `Migration versions must start at 1 and be consecutive. Found: ${actualVersions.join(', ')}`);
     }
     for (const entry of migrationEntries) {
-      const filePath = path.join(extractDir, entry.file);
-      if (!fs.existsSync(filePath)) {
-        check(12, 'critical', 'MIGRATION_FILE_MISSING', `Migration file ${entry.file} not found`);
-        continue;
-      }
-      const sql = fs.readFileSync(filePath, 'utf-8');
+      const resolved = this.resolveReference(extractDir, entry.file, 'file');
+      if (!resolved.path) continue;
+      const sql = fs.readFileSync(resolved.path, 'utf-8');
       if (/CREATE\s+INDEX\s+CONCURRENTLY/i.test(sql)) {
         check(12, 'critical', 'MIGRATION_CONCURRENTLY',
           `Migration ${entry.file} uses CREATE INDEX CONCURRENTLY, which cannot run inside a transaction. Use CREATE INDEX instead.`);
-      }
-      if (entry.down) {
-        const downPath = path.join(extractDir, entry.down);
-        if (!fs.existsSync(downPath)) {
-          check(12, 'critical', 'MIGRATION_DOWN_MISSING',
-            `Down migration ${entry.down} declared but file not found`);
-        }
       }
     }
 
@@ -475,6 +491,219 @@ export class AppValidatorService {
     return this.buildReport(results, manifest.appId);
   }
 
+  private validateManifestReferences(
+    extractDir: string,
+    manifest: AppManifest,
+    report: (code: string, message: string, details?: string) => void,
+  ): void {
+    const validate = (reference: string, kind: 'file' | 'directory', label: string) => {
+      const resolved = this.resolveReference(extractDir, reference, kind);
+      if (!resolved.path) report(resolved.code!, `${label}: ${resolved.message}`, reference);
+      return resolved.path;
+    };
+
+    if (manifest.backend) {
+      const entry = validate(manifest.backend.entry, 'file', 'backend.entry');
+      if (!/^[A-Za-z_$][\w$]*$/.test(manifest.backend.module)) {
+        report('BACKEND_MODULE_INVALID', `backend.module "${manifest.backend.module}" is not a valid exported class identifier`);
+      }
+      if (!/^\.?\/?dist\/.+\.(?:c?js)$/i.test(manifest.backend.entry)) {
+        report('BACKEND_ENTRY_INVALID', 'backend.entry must reference a JavaScript file under dist/');
+      }
+      if (entry) {
+        try {
+          execFileSync(process.execPath, ['--check', entry], {
+            stdio: 'pipe',
+            timeout: 2000,
+            windowsHide: true,
+          });
+        } catch {
+          report('BACKEND_ENTRY_SYNTAX_INVALID', 'backend.entry is not valid executable JavaScript', manifest.backend.entry);
+        }
+        const source = fs.readFileSync(entry, 'utf-8');
+        const moduleName = manifest.backend.module.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const exportsModule = new RegExp(
+          `(?:exports\\.${moduleName}\\s*=|exports\\[['"]${moduleName}['"]\\]\\s*=|export\\s+(?:default\\s+)?class\\s+${moduleName}\\b)`,
+        ).test(source);
+        const hasFactory = new RegExp(`class\\s+${moduleName}\\b[\\s\\S]*?\\bstatic\\s+forApp\\s*\\(`).test(source);
+        if (!exportsModule || !hasFactory) {
+          report('BACKEND_MODULE_SHAPE_INVALID',
+            `backend entry must export "${manifest.backend.module}" with a static forApp factory`, manifest.backend.entry);
+        }
+      }
+    }
+
+    for (const panel of manifest.panels ?? []) {
+      if (panel.entryComponent) {
+        const entry = validate(panel.entryComponent, 'file', `panel ${panel.id} entryComponent`);
+        if (entry && !this.hasDefaultEsmExport(entry)) {
+          report('PANEL_ENTRY_SHAPE_INVALID', `Panel "${panel.id}" entryComponent must have a default ESM export`, panel.entryComponent);
+        }
+      }
+      if (panel.messageSchema) {
+        const schema = validate(panel.messageSchema, 'file', `panel ${panel.id} messageSchema`);
+        if (schema && !this.hasDefaultEsmExport(schema)) {
+          report('PANEL_MESSAGE_SCHEMA_SHAPE_INVALID',
+            `Panel "${panel.id}" messageSchema must have a default ESM export`, panel.messageSchema);
+        }
+      }
+      if (panel.icon && this.isFileReferenceIcon(panel.icon)) {
+        validate(panel.icon, 'file', `panel ${panel.id} icon`);
+      }
+    }
+
+    for (const agent of manifest.agents ?? []) {
+      validate(agent.file, 'file', 'agent file');
+      if (!/\.ya?ml$/i.test(agent.file)) {
+        report('AGENT_FILE_TYPE_INVALID', 'Agent file must use .yaml or .yml', agent.file);
+      }
+    }
+    for (const skill of manifest.skills ?? []) {
+      if (validate(skill.dir, 'directory', 'skill dir')) {
+        validate(path.posix.join(skill.dir, 'SKILL.md'), 'file', 'skill definition');
+      }
+    }
+    for (const migration of manifest.migrations ?? []) {
+      validate(migration.file, 'file', 'migration file');
+      if (migration.down) validate(migration.down, 'file', 'down migration file');
+    }
+    if (manifest.icon && this.isFileReferenceIcon(manifest.icon)) {
+      validate(manifest.icon, 'file', 'app icon');
+    }
+
+    // ── 伴随服务引用闭包（PLAT-016）──
+    const configFields = manifest.configSchema?.fields ?? [];
+    const secretKeys = new Set(configFields.filter(f => f.type === 'secret').map(f => f.key));
+    const configKeys = new Set(configFields.map(f => f.key));
+    const serviceIds = new Set<string>();
+    for (const svc of manifest.services ?? []) {
+      if (serviceIds.has(svc.id)) {
+        report('SERVICE_ID_DUPLICATE', `service id "${svc.id}" duplicated`, svc.id);
+      }
+      serviceIds.add(svc.id);
+      if (validate(svc.cwd, 'directory', `service ${svc.id} cwd`)) {
+        if (svc.runtime === 'container' && !svc.image) {
+          validate(path.posix.join(svc.cwd, 'Dockerfile'), 'file', `service ${svc.id} Dockerfile`);
+        }
+      }
+      if (svc.runtime === 'process' && !(svc.command?.length)) {
+        report('SERVICE_COMMAND_MISSING', `service ${svc.id}: runtime=process 必须声明 command`, svc.id);
+      }
+      if (svc.runtime === 'container' && !svc.containerPort) {
+        report('SERVICE_PORT_MISSING', `service ${svc.id}: runtime=container 必须声明 containerPort`, svc.id);
+      }
+      for (const [envKey, envVal] of Object.entries(svc.env ?? {})) {
+        const m = /^\{secret:([a-zA-Z][a-zA-Z0-9_]{0,31})\}$/.exec(envVal);
+        if (m && !secretKeys.has(m[1])) {
+          report('SERVICE_SECRET_REF_INVALID',
+            `service ${svc.id} env ${envKey}: secret 引用 "${m[1]}" 不是 configSchema 的 secret 字段`, svc.id);
+        }
+      }
+      for (const injectKey of Object.keys(svc.inject ?? {})) {
+        const key = injectKey.replace(/^config\./, '');
+        if (!configKeys.has(key)) {
+          report('SERVICE_INJECT_TARGET_INVALID',
+            `service ${svc.id} inject "${injectKey}": 目标不是 configSchema 已声明字段`, svc.id);
+        }
+      }
+    }
+  }
+
+  private hasDefaultEsmExport(file: string): boolean {
+    if (!/\.(?:m?js)$/i.test(file)) return false;
+    const source = fs.readFileSync(file, 'utf-8');
+    return /\bexport\s+default\b/.test(source)
+      || /\bexport\s*\{[\s\S]*?\bas\s+default\b[\s\S]*?\}/.test(source);
+  }
+
+  private isFileReferenceIcon(icon: string): boolean {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(icon)) return false;
+    return icon.startsWith('./') || icon.includes('/') || /\.(?:svg|png|jpe?g|webp|ico)$/i.test(icon);
+  }
+
+  private resolveReference(
+    extractDir: string,
+    reference: string,
+    kind: 'file' | 'directory',
+  ): { path?: string; code?: string; message?: string } {
+    if (!reference || reference.includes('\0') || reference.includes('\\')
+      || path.posix.isAbsolute(reference) || path.win32.isAbsolute(reference) || /^[A-Za-z]:/.test(reference)) {
+      return { code: 'REFERENCE_ABSOLUTE_PATH', message: `unsafe absolute or non-portable path "${reference}"` };
+    }
+    const trimmed = reference.replace(/\/+$/, '');
+    const sourceParts = trimmed.split('/');
+    if (sourceParts.some(part => part === '' || part === '..')) {
+      return { code: 'REFERENCE_PATH_TRAVERSAL', message: `path escapes package root: "${reference}"` };
+    }
+    const parts = sourceParts.filter(part => part !== '.');
+    if (parts.length === 0) {
+      return { code: 'REFERENCE_PATH_TRAVERSAL', message: `path escapes package root: "${reference}"` };
+    }
+
+    let current = path.resolve(extractDir);
+    for (const part of parts) {
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(current);
+      } catch {
+        return { code: 'REFERENCE_MISSING', message: `referenced ${kind} does not exist: "${reference}"` };
+      }
+      if (!entries.includes(part)) {
+        const caseMatch = entries.find(entry => entry.toLocaleLowerCase('en-US') === part.toLocaleLowerCase('en-US'));
+        if (caseMatch) {
+          return { code: 'REFERENCE_CASE_MISMATCH', message: `reference case differs on disk: "${reference}"` };
+        }
+        return { code: 'REFERENCE_MISSING', message: `referenced ${kind} does not exist: "${reference}"` };
+      }
+      current = path.join(current, part);
+      const stat = fs.lstatSync(current);
+      if (stat.isSymbolicLink()) {
+        return { code: 'REFERENCE_SYMLINK', message: `reference contains a symbolic link: "${reference}"` };
+      }
+    }
+
+    const root = path.resolve(extractDir);
+    if (current !== root && !current.startsWith(root + path.sep)) {
+      return { code: 'REFERENCE_PATH_TRAVERSAL', message: `path escapes package root: "${reference}"` };
+    }
+    const stat = fs.lstatSync(current);
+    if ((kind === 'file' && !stat.isFile()) || (kind === 'directory' && !stat.isDirectory())) {
+      return { code: 'REFERENCE_WRONG_KIND', message: `reference is not a ${kind}: "${reference}"` };
+    }
+    return { path: current };
+  }
+
+  private inspectPackageTree(
+    rootDir: string,
+    report: (code: string, message: string, details?: string) => void,
+  ): string[] {
+    const files: string[] = [];
+    const folded = new Map<string, string>();
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        const rel = path.relative(rootDir, full).split(path.sep).join('/');
+        const lower = rel.toLocaleLowerCase('en-US');
+        const previous = folded.get(lower);
+        if (previous && previous !== rel) {
+          report('CASE_CONFLICT', `Package paths differ only by case: ${previous} / ${rel}`, rel);
+        } else {
+          folded.set(lower, rel);
+        }
+        const stat = fs.lstatSync(full);
+        if (stat.isSymbolicLink()) {
+          report('SYMLINK_NOT_ALLOWED', `Symbolic links are not allowed in app packages: ${rel}`, rel);
+          continue;
+        }
+        if (stat.isDirectory()) walk(full);
+        else if (stat.isFile()) files.push(full);
+        else report('UNSUPPORTED_FILE_TYPE', `Unsupported package entry type: ${rel}`, rel);
+      }
+    };
+    walk(rootDir);
+    return files;
+  }
+
   private buildReport(results: CheckResult[], appId?: string): ValidationReport {
     const criticals = results.filter(r => r.level === 'critical');
     const warnings = results.filter(r => r.level === 'warning');
@@ -493,8 +722,10 @@ export class AppValidatorService {
     const walk = (d: string) => {
       for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
         const full = path.join(d, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else results.push(full);
+        const stat = fs.lstatSync(full);
+        if (stat.isSymbolicLink()) continue;
+        if (stat.isDirectory()) walk(full);
+        else if (stat.isFile()) results.push(full);
       }
     };
     walk(dir);

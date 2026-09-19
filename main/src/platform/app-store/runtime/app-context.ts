@@ -5,6 +5,7 @@ import type { PoolClient } from 'pg';
 import { AppPoolService } from '../services/app-pool.service';
 import { AppLogService } from '../services/app-log.service';
 import type { AppPlatformFacade } from '../services/app-platform.service';
+import type { AppConnectionClient } from '../../../agent/tool-bridge/tool-provider.interface';
 import { WorkspaceService } from '../../../workspace/workspace.service';
 import { ModelRouterService } from '../../../model-router/model-router.service';
 import { loadPiAi } from '../../../pi';
@@ -33,6 +34,8 @@ export interface AppContextDeps {
   usesPlatformTools?: string[];
   /** 平台工具执行器（由 activation 经 ToolBridgeService.callTool 注入） */
   toolExecutor?: (toolId: string, params: unknown) => Promise<unknown>;
+  /** 按 bindingId 调用用户授权连接；后台调用每次解析持久 service principal */
+  connections?: AppConnectionClient;
   /** 首方运行时通道（仅声明 appstore:* 的首方包注入，见 AppPlatformService.buildFacade） */
   platform?: AppPlatformFacade;
 }
@@ -116,6 +119,11 @@ export class AppContext {
       return this.deps.toolExecutor(name, params);
     },
   };
+
+  get connections(): AppConnectionClient {
+    if (!this.deps.connections) throw new Error('Connection binding service not available');
+    return this.deps.connections;
+  }
 
   /**
    * 首方运行时通道（D5 运行时半）。

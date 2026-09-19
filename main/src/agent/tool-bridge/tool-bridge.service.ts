@@ -3,8 +3,18 @@ import { Injectable, Inject, Optional, Logger } from '@nestjs/common';
 import { ToolProvider, ToolContext, ToolInstance, ToolCatalogEntry, TOOL_PROVIDERS } from './tool-provider.interface';
 import { DynamicToolProviderRegistry } from './dynamic-tool-provider.registry';
 import { AppGrantService } from '../../platform/app-store/services/app-grant.service';
+import { AppConnectionBindingService } from '../../platform/app-store/services/app-connection-binding.service';
 import { UserService } from '../../user/user.service';
+import {
+  InvocationPrincipal,
+  InvocationPrincipalInput,
+  normalizeInvocationPrincipal,
+  principalHasScope,
+  principalIsExpired,
+} from '../../platform/app-store/runtime/invocation-principal';
 import { classifyError, formatToolError } from './tool-error';
+import { McpRegistryService } from '../../capability/mcp/mcp-registry.service';
+import { CompanionServiceManager } from '../../platform/app-store/runtime/companion-service.manager';
 
 /**
  * ToolBridgeService — collects all ToolProviders and builds tool sets for agents.
@@ -21,15 +31,14 @@ export class ToolBridgeService {
   private toolInstanceCache = new Map<string, { tools: ToolInstance[]; expiry: number }>();
   private static readonly TOOL_CACHE_TTL_MS = 60 * 1000; // 1 minute
 
-  // App tool access cache: "appId:userId" -> { allowed, expiry }
-  private toolAccessCache = new Map<string, { allowed: boolean; expiry: number }>();
-  private static readonly TOOL_ACCESS_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
   constructor(
     @Optional() @Inject(TOOL_PROVIDERS) private readonly providers: ToolProvider[] = [],
     @Optional() private readonly dynamicRegistry?: DynamicToolProviderRegistry,
     @Optional() private readonly appGrantService?: AppGrantService,
     @Optional() private readonly userService?: UserService,
+    @Optional() private readonly connectionBindings?: AppConnectionBindingService,
+    @Optional() private readonly mcpRegistry?: McpRegistryService,
+    @Optional() private readonly companionManager?: CompanionServiceManager,
   ) {
     for (const p of (this.providers || [])) {
       for (const id of p.toolIds) {
@@ -41,6 +50,7 @@ export class ToolBridgeService {
         }
       }
     }
+    this.mcpRegistry?.onChange(() => this.invalidateToolCache('mcp'));
     const dynamicCount = this.dynamicRegistry ? this.dynamicRegistry.getAll().length : 0;
     if (this.providers?.length > 0 || dynamicCount > 0) {
       this.logger.log(`Registered ${this.providers.length} static tool providers (${this.providerMap.size} static tool IDs), ${dynamicCount} dynamic providers`);
@@ -53,20 +63,52 @@ export class ToolBridgeService {
     this.logger.log(`ToolBridgeService initialized (${this.providerMap.size} tool IDs)`);
   }
 
+  invalidateToolCache(toolId?: string): void {
+    if (!toolId) {
+      this.toolInstanceCache.clear();
+      return;
+    }
+    const provider = this.findProvider(toolId);
+    if (!provider) return;
+    const prefix = `${provider.toolIds.join(',')}::`;
+    for (const key of this.toolInstanceCache.keys()) {
+      if (key.startsWith(prefix)) this.toolInstanceCache.delete(key);
+    }
+  }
+
   private cacheKeyForProvider(provider: ToolProvider, ctx: ToolContext): string {
-    // Only user/agent-scoped fields affect tool shape; piAi is process-global.
-    return `${provider.toolIds.join(',')}::${ctx.userId || ''}::${ctx.userEmail || ''}::${ctx.agentKey || ''}`;
+    const principal = ctx.principal;
+    const identity = principal
+      ? [
+          principal.type,
+          principal.principalId,
+          principal.tokenId ?? '',
+          principal.expiresAt ?? '',
+          principal.roleIds.join(','),
+          principal.departmentIds.join(','),
+          principal.permissions.join(','),
+          principal.scopes.join(','),
+        ].join(':')
+      : ctx.userId || '';
+    return `${provider.toolIds.join(',')}::${identity}::${ctx.userEmail || ''}::${ctx.agentKey || ''}`;
   }
 
   private async getOrCreateTools(provider: ToolProvider, triggerId: string, ctx: ToolContext): Promise<ToolInstance[]> {
-    const key = this.cacheKeyForProvider(provider, ctx);
+    const ownerApp = this.dynamicRegistry?.getOwnerForProvider(provider);
+    const providerCtx = ownerApp && this.connectionBindings
+      ? {
+          ...ctx,
+          connections: this.connectionBindings.createClient(ownerApp, ctx.principal),
+        }
+      : ctx;
+    const key = this.cacheKeyForProvider(provider, providerCtx);
     const cached = this.toolInstanceCache.get(key);
     if (cached && cached.expiry > Date.now()) {
       return cached.tools;
     }
 
     try {
-      const tools = await provider.createTools(ctx);
+      const tools = await provider.createTools(providerCtx);
       this.toolInstanceCache.set(key, { tools, expiry: Date.now() + ToolBridgeService.TOOL_CACHE_TTL_MS });
       return tools;
     } catch (err: any) {
@@ -84,7 +126,13 @@ export class ToolBridgeService {
     ctx: ToolContext,
     maxToolOutputChars?: number,
   ): Promise<ToolInstance[]> {
-    const fullCtx: ToolContext = { ...ctx, piAi: this.piAi };
+    const principal = ctx.principal ?? normalizeInvocationPrincipal(ctx.userId, 'legacy-tool-context');
+    const fullCtx: ToolContext = {
+      ...ctx,
+      principal,
+      userId: principal?.userId ?? ctx.userId,
+      piAi: this.piAi,
+    };
     const tools: { tool: ToolInstance; triggerId: string }[] = [];
     const individualTools: string[] = [];
     const individualMcps: string[] = [];
@@ -155,7 +203,7 @@ export class ToolBridgeService {
     }
 
     // Global safety wrapper: auth + truncation + error catch
-    return this.wrapWithSafety(deduped, ctx.userId, maxToolOutputChars);
+    return this.wrapWithSafety(deduped, principal, maxToolOutputChars);
   }
 
   /** Get catalog for settings UI */
@@ -184,25 +232,46 @@ export class ToolBridgeService {
   }
 
   private findProvider(toolId: string): ToolProvider | undefined {
-    return this.providerMap.get(toolId) ?? this.dynamicRegistry?.getAll().find(p => p.toolIds.includes(toolId));
+    const exact = this.providerMap.get(toolId) ?? this.dynamicRegistry?.getAll().find(p => p.toolIds.includes(toolId));
+    if (exact) return exact;
+    if (toolId.startsWith('mcp_')) return this.providerMap.get('mcp');
+    if (toolId.startsWith('tool_')) return this.providerMap.get('tools');
+    return undefined;
   }
 
   // ── Safety wrapper (L1 truncation + error catch) ────────────────────────
 
-  private wrapWithSafety(tools: ToolInstance[], userId?: string, maxToolOutputChars?: number): ToolInstance[] {
+  private wrapWithSafety(
+    tools: ToolInstance[],
+    principalInput?: InvocationPrincipalInput,
+    maxToolOutputChars?: number,
+  ): ToolInstance[] {
+    const principal = normalizeInvocationPrincipal(principalInput, 'legacy-tool-execution');
     return tools.map(tool => ({
       ...tool,
       execute: async (...args: any[]) => {
-        // Auth gate for tools contributed by installed apps.
         const ownerApp = this.dynamicRegistry?.getOwnerApp(tool.name);
-        if (ownerApp && userId) {
-          const allowed = await this.checkToolAccess(ownerApp, userId);
-          if (!allowed) {
+        if (ownerApp && this.dynamicRegistry?.isDraining(ownerApp)) {
+          return {
+            content: [{ type: 'text' as const, text: `Conflict: app ${ownerApp} is deactivating` }],
+            details: { __error: { code: 'APP_DRAINING', message: `App ${ownerApp} is deactivating` } },
+          };
+        }
+        // PLAT-016：伴随服务运行期不健康 → degraded，工具调用明确报错（不放行产生脏结果）
+        if (ownerApp) {
+          const degraded = this.companionManager?.isDegraded(ownerApp);
+          if (degraded?.degraded) {
             return {
-              content: [{ type: 'text' as const, text: `Forbidden: no grant for app ${ownerApp}` }],
-              details: { __error: { code: 'FORBIDDEN', message: `No grant for app ${ownerApp}` } },
+              content: [{ type: 'text' as const, text: `Service Unavailable: ${degraded.reason}` }],
+              details: { __error: { code: 'APP_SERVICE_UNHEALTHY', message: degraded.reason ?? 'companion service unhealthy' } },
             };
           }
+        }
+        if (ownerApp && !(await this.checkToolAccess(ownerApp, principal, tool.name))) {
+          return {
+            content: [{ type: 'text' as const, text: `Forbidden: no grant for app ${ownerApp}` }],
+            details: { __error: { code: 'FORBIDDEN', message: `No grant for app ${ownerApp}` } },
+          };
         }
         try {
           const result = await tool.execute(...args);
@@ -220,23 +289,37 @@ export class ToolBridgeService {
     }));
   }
 
-  private async checkToolAccess(appId: string, userId: string): Promise<boolean> {
-    const key = `${appId}:${userId}`;
-    const cached = this.toolAccessCache.get(key);
-    if (cached && cached.expiry > Date.now()) return cached.allowed;
+  private async checkToolAccess(appId: string, principal?: InvocationPrincipal, toolId?: string): Promise<boolean> {
+    if (!principal || principalIsExpired(principal)) return false;
+    if (principal.type === 'user' && principal.permissions.includes('sys:admin')) return true;
+    if (principal.type === 'system' || principal.type === 'service' || principal.type === 'dev-mcp') {
+      return principalHasScope(principal, 'app:invoke')
+        || principalHasScope(principal, `app:${appId}:invoke`);
+    }
+    if (!principal.userId || !this.appGrantService) return false;
 
-    let allowed = false;
-    if (this.userService && this.appGrantService) {
-      const user = await this.userService.getUser(userId);
-      if (user?.role?.permissions?.includes('sys:admin')) {
-        allowed = true;
-      } else {
-        allowed = await this.appGrantService.hasAppAccess(appId, userId);
+    let effectivePrincipal = principal;
+    if (this.userService && principal.roleIds.length === 0 && principal.permissions.length === 0) {
+      const user = await this.userService.getUser(principal.userId);
+      if (!user) return false;
+      effectivePrincipal = {
+        ...principal,
+        roleIds: user.role?.id ? [user.role.id] : [],
+        permissions: user.role?.permissions ?? [],
+      };
+      if (
+        effectivePrincipal.type === 'user'
+        && effectivePrincipal.permissions.includes('sys:admin')
+      ) return true;
+    }
+    // tool 声明了 required permission 时按细粒度判定，否则回退 app 粒度（PLAT-010）
+    if (toolId) {
+      const requiredPermission = await this.appGrantService.getRequiredToolPermission(appId, toolId);
+      if (requiredPermission) {
+        return this.appGrantService.hasPermissionForPrincipal(appId, requiredPermission, effectivePrincipal);
       }
     }
-
-    this.toolAccessCache.set(key, { allowed, expiry: Date.now() + ToolBridgeService.TOOL_ACCESS_CACHE_TTL_MS });
-    return allowed;
+    return this.appGrantService.hasAppAccessForPrincipal(appId, effectivePrincipal);
   }
 
   /**
@@ -245,13 +328,24 @@ export class ToolBridgeService {
    * (auth + truncation + error classification) as agent tool calls.
    * Structured tool errors are re-thrown as exceptions for app code.
    */
-  async callTool(toolId: string, params: unknown, userId?: string): Promise<unknown> {
+  async callTool(
+    toolId: string,
+    params: unknown,
+    principalInput?: InvocationPrincipalInput,
+  ): Promise<unknown> {
+    const principal = normalizeInvocationPrincipal(principalInput, 'legacy-direct-tool');
     const provider = this.findProvider(toolId);
     if (!provider) throw new Error(`Unknown platform tool: ${toolId}`);
-    const created = await this.getOrCreateTools(provider, toolId, { userId, piAi: this.piAi });
-    const tool = created.find(t => t.name === toolId) ?? created[0];
-    if (!tool) throw new Error(`Tool ${toolId} not created by its provider`);
-    const [wrapped] = this.wrapWithSafety([tool], userId);
+    const created = await this.getOrCreateTools(provider, toolId, {
+      principal,
+      userId: principal?.userId,
+      piAi: this.piAi,
+    });
+    const matches = created.filter(t => t.name === toolId);
+    if (matches.length !== 1) {
+      throw new Error(`Tool ${toolId} must resolve to exactly one instance; received ${matches.length}`);
+    }
+    const [wrapped] = this.wrapWithSafety(matches, principal);
     const result = await wrapped.execute(toolId, params);
     const structured = (result as any)?.details?.__error;
     if (structured) {

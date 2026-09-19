@@ -11,9 +11,35 @@ import { AnalyticsService } from '../../platform/analytics/analytics.service';
 import { EditionService } from '../../edition/edition.service';
 import { OemService } from '../../platform/oem/oem.service';
 import { ConfirmationBridgeService, ConfirmRequest } from '../support/confirmation-bridge.service';
+import {
+  createUserPrincipal,
+  InvocationPrincipal,
+} from '../../platform/app-store/runtime/invocation-principal';
 
 /** OEM sessions are locked to the data_master agent. */
 const OEM_AGENT_ID = 'data_master';
+
+/** 进行中的一轮生成：供重进会话（chat.attach）恢复流式状态用。内存态，后端重启即丢失（退化为仅历史）。 */
+interface ActiveRun {
+  key: string;              // `${userId}:${agentSessionId}`
+  room: string;             // `chatrun:${userId}:${agentSessionId}`
+  userId: string;
+  agentId: string;
+  agentSessionId: string;
+  conversationId: string;
+  status: 'running' | 'done' | 'error';
+  text: string;             // 已流式正文累计
+  toolCalls: { name: string; args?: any; result?: any }[];
+  startedAt: number;
+  model?: string;
+  cost?: number;
+  tokens?: any;
+  error?: string;
+  expiresAt?: number;       // done/error 后保留 60s 供 attach 取最终态，读取处惰性清理
+}
+
+/** done/error 后注册表保留时长（ms），消除"attach 恰在 done 与落库之间"的竞态窗口 */
+const RUN_RETENTION_MS = 60_000;
 
 @WebSocketGateway({
   cors: { origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()) : true, credentials: true },
@@ -22,7 +48,22 @@ const OEM_AGENT_ID = 'data_master';
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server: Server;
   private readonly logger = new Logger(ChatGateway.name);
-  private socketUsers = new Map<string, { id: string; name: string; email?: string; oem?: { appId: string; externalUid: string; dataSources: any[]; rateLimit: any } }>();
+  private socketUsers = new Map<string, {
+    id: string;
+    name: string;
+    email?: string;
+    principal: InvocationPrincipal;
+    oem?: { appId: string; externalUid: string; dataSources: any[]; rateLimit: any };
+  }>();
+  private activeRuns = new Map<string, ActiveRun>();
+
+  /** 惰性清理已过期的 done/error run */
+  private pruneRuns() {
+    const now = Date.now();
+    for (const [k, r] of this.activeRuns) {
+      if (r.expiresAt && r.expiresAt <= now) this.activeRuns.delete(k);
+    }
+  }
 
   constructor(
     private readonly agentService: DynamicAgentService,
@@ -79,12 +120,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       oem = { appId: oemClaims.appId, externalUid: oemClaims.externalUid, dataSources: cfg.dataSources, rateLimit: cfg.rateLimit };
     }
 
-    this.socketUsers.set(client.id, { id: user.id, name: user.username || user.name, email: user.email, oem });
+    const principal = createUserPrincipal(user, 'websocket:chat');
+    this.socketUsers.set(client.id, {
+      id: user.id,
+      name: user.username || user.name,
+      email: user.email,
+      principal,
+      oem,
+    });
     this.analytics.registerUser(user.id, user.username || user.name);
     this.logger.log(`Connected: ${client.id} (${user.username || user.name})${oem ? ` [OEM ${oem.appId}]` : ''}`);
 
     // Pre-warm main agent in background so first message is fast
-    this.agentService.warmupAgent(user.id).catch(() => {});
+    this.agentService.warmupAgent(user.id, undefined, principal).catch(() => {});
   }
 
   handleDisconnect(client: Socket) {
@@ -166,6 +214,17 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     const agentSessionId = sessionId || conversationId;
 
+    // 注册进行中 run 并让发起方入 room：重进会话的其他 socket 可 attach 到同一 room 接续收事件
+    this.pruneRuns();
+    const run: ActiveRun = {
+      key: `${userId}:${agentSessionId}`,
+      room: `chatrun:${userId}:${agentSessionId}`,
+      userId, agentId, agentSessionId, conversationId,
+      status: 'running', text: '', toolCalls: [], startedAt: Date.now(),
+    };
+    this.activeRuns.set(run.key, run);
+    client.join(run.room);
+
     // Record user message event for analytics
     this.analytics.recordEvent({ type: 'conversation_message', conversationId, userId, agentId, contentLength: content?.length || 0 }).catch(() => {});
     const startTime = Date.now();
@@ -191,10 +250,29 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       let doneTokens = { input: 0, output: 0, total: 0 };
 
       const userEmail = user?.email || undefined;
-      for await (const chunk of this.agentService.processMessage(agentId, agentSessionId, userId, fullContent, pageContext, attachments, userEmail)) {
-        this.emitChunk(client, conversationId, chunk);
-        if (chunk.type === 'text_delta' && chunk.text) assistantContent += chunk.text;
+      for await (const chunk of this.agentService.processMessage(
+        agentId,
+        agentSessionId,
+        userId,
+        fullContent,
+        pageContext,
+        attachments,
+        userEmail,
+        user?.principal,
+      )) {
+        this.emitChunk(run, chunk);
+        if (chunk.type === 'text_delta' && chunk.text) {
+          assistantContent += chunk.text;
+          run.text += chunk.text;
+        }
         if (chunk.type === 'tool_call' && chunk.toolName) {
+          // 对齐前端合并规则：无 result 追加新调用，有 result 合并到最后一个同名调用
+          if (chunk.toolResult) {
+            const last = [...run.toolCalls].reverse().find(t => t.name === chunk.toolName && t.result === undefined);
+            if (last) last.result = chunk.toolResult; else run.toolCalls.push({ name: chunk.toolName, args: chunk.toolArgs, result: chunk.toolResult });
+          } else {
+            run.toolCalls.push({ name: chunk.toolName, args: chunk.toolArgs });
+          }
           this.analytics.recordEvent({ type: 'tool_call', conversationId, userId, agentId, toolName: chunk.toolName }).catch(() => {});
           // P2-17: record structured tool failures (from P0-5 __error) for the efficiency board
           const err = chunk.toolResult?.details?.__error;
@@ -212,8 +290,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Safety: ensure frontend always gets a done signal
       if (!gotDone) {
-        client.emit('chat.stream', { conversationId, delta: '', done: true, model: 'unknown' });
+        this.server.to(run.room).emit('chat.stream', { conversationId, sessionId: run.agentSessionId, delta: '', done: true, model: 'unknown' });
       }
+
+      // run 置终态并保留 60s：attach 恰在 done 与落库之间时可取回最终文本
+      run.status = 'done';
+      run.model = doneModel; run.cost = doneCost; run.tokens = doneTokens;
+      run.expiresAt = Date.now() + RUN_RETENTION_MS;
 
       // Record completion event for analytics
       const routeType = doneModel.startsWith('Local') || doneModel.includes('qwen') || doneModel.includes('ollama') ? 'local' : 'cloud';
@@ -236,9 +319,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       if (sessionId && assistantContent.trim()) {
         await this.sessionService.saveMessage(sessionId, 'assistant', `${assistantContent}\n\n⚠️ ${is402 ? '积分不足，请充值后继续使用' : msg}`).catch(() => {});
       }
-      client.emit('chat.error', { conversationId, error: is402 ? '积分不足，请充值后继续使用' : msg });
+      run.status = 'error';
+      run.error = is402 ? '积分不足，请充值后继续使用' : msg;
+      run.expiresAt = Date.now() + RUN_RETENTION_MS;
+      this.server.to(run.room).emit('chat.error', { conversationId, sessionId: run.agentSessionId, error: run.error });
       // Ensure streaming ends on frontend even after error
-      client.emit('chat.stream', { conversationId, delta: '', done: true });
+      this.server.to(run.room).emit('chat.stream', { conversationId, sessionId: run.agentSessionId, delta: '', done: true });
     } finally {
       this.confirmBridge.events.off('confirm_request', onConfirmRequest);
       this.confirmBridge.events.off('confirm_timeout', onConfirmTimeout);
@@ -266,54 +352,106 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.confirmBridge.handleReply(data.confirmId, data.confirmed, data.editedArgs);
   }
 
-  private emitChunk(client: Socket, conversationId: string, chunk: StreamChunk) {
+  /**
+   * 重进会话恢复：join 进行中 run 的 room 并回发快照。
+   * 有 sessionId 时校验归属后按 session 精确匹配；无 sessionId 时按 userId+agentId 找 run（main agent 刷新恢复用）。
+   */
+  @SubscribeMessage('chat.attach')
+  async handleAttach(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { sessionId?: string; agentId?: string },
+  ) {
+    const user = this.socketUsers.get(client.id);
+    const userId = user?.id || 'anonymous';
+    this.pruneRuns();
+
+    let run: ActiveRun | undefined;
+    if (data.sessionId) {
+      const session = await this.sessionService.getSession(data.sessionId).catch(() => null);
+      // 归属校验：防止越权订阅他人 run；OEM 锁定 data_master
+      if (!session || session.userId !== userId || (user?.oem && session.agentType !== OEM_AGENT_ID)) {
+        client.emit('chat.attached', { sessionId: data.sessionId, status: 'none' });
+        return;
+      }
+      run = this.activeRuns.get(`${userId}:${data.sessionId}`);
+    } else {
+      const agentId = user?.oem ? OEM_AGENT_ID : (data.agentId || 'main');
+      const candidates = [...this.activeRuns.values()].filter(r => r.userId === userId && r.agentId === agentId);
+      run = candidates.find(r => r.status === 'running') ||
+            candidates.sort((a, b) => b.startedAt - a.startedAt)[0];
+    }
+
+    if (!run) {
+      client.emit('chat.attached', { sessionId: data.sessionId, status: 'none' });
+      return;
+    }
+
+    // 先 join 再发快照：消除快照与实时事件之间的漏事件窗口
+    client.join(run.room);
+    client.emit('chat.attached', {
+      conversationId: run.conversationId,
+      sessionId: run.agentSessionId,
+      status: run.status,
+      snapshot: {
+        text: run.text,
+        toolCalls: run.toolCalls,
+        model: run.model, cost: run.cost, tokens: run.tokens, error: run.error,
+        startedAt: run.startedAt,
+      },
+    });
+  }
+
+  /** 广播到 run 的 room：发起方与 attach 重进的其他 socket 都能收到；payload 统一带 sessionId 供前端二次过滤 */
+  private emitChunk(run: ActiveRun, chunk: StreamChunk) {
+    const to = this.server.to(run.room);
+    const base = { conversationId: run.conversationId, sessionId: run.agentSessionId };
     switch (chunk.type) {
       case 'debug':
-        client.emit('chat.debug', { conversationId, ...chunk.debug });
+        to.emit('chat.debug', { ...base, ...chunk.debug });
         break;
       case 'text_delta':
         this.logger.debug(`[EMIT] text_delta len=${(chunk.text || '').length} text=${(chunk.text || '').substring(0, 80).replace(/\n/g, '\\n')}`);
-        client.emit('chat.stream', { conversationId, delta: chunk.text, done: false });
+        to.emit('chat.stream', { ...base, delta: chunk.text, done: false });
         break;
       case 'thinking_delta':
         // 推理模型思考流：单独通道，不进正文、不落库；不逐条记日志（量大）
-        client.emit('chat.thinking', { conversationId, delta: chunk.text });
+        to.emit('chat.thinking', { ...base, delta: chunk.text });
         break;
       case 'thinking_start':
         // 新一轮 LLM 调用：前端重置思考流显示（按轮次替换）
-        client.emit('chat.thinking_reset', { conversationId });
+        to.emit('chat.thinking_reset', { ...base });
         break;
       case 'tool_call':
         const resultSnippet = chunk.toolResult ? (typeof chunk.toolResult.content?.[0]?.text === 'string' ? chunk.toolResult.content[0].text : JSON.stringify(chunk.toolResult)).substring(0, 100) : '(start)';
         this.logger.debug(`[EMIT] tool_call ${chunk.toolName} ${chunk.toolResult ? 'result=' + resultSnippet : 'args=' + JSON.stringify(chunk.toolArgs || {}).substring(0, 100)}`);
-        client.emit('chat.tool', { conversationId, toolName: chunk.toolName, args: chunk.toolArgs, result: chunk.toolResult });
+        to.emit('chat.tool', { ...base, toolName: chunk.toolName, args: chunk.toolArgs, result: chunk.toolResult });
         if (chunk.toolResult?.details) {
           this.logger.debug(`[EMIT] tool_call ${chunk.toolName} has details: ${JSON.stringify(Object.keys(chunk.toolResult.details))}`);
         }
         if (chunk.toolResult?.details?.__action) {
           this.logger.log(`[EMIT] chat.action: ${chunk.toolResult.details.actionType} → ${JSON.stringify(chunk.toolResult.details.actionData || {}).substring(0, 100)}`);
-          client.emit('chat.action', { conversationId, ...chunk.toolResult.details });
+          to.emit('chat.action', { ...base, ...chunk.toolResult.details });
         }
         break;
       case 'context_status':
         this.logger.debug(`[EMIT] chat.context level=${chunk.contextStatus?.level} usage=${chunk.contextStatus?.usagePercent}%`);
-        client.emit('chat.context', { conversationId, ...chunk.contextStatus });
+        to.emit('chat.context', { ...base, ...chunk.contextStatus });
         break;
       case 'tool_start':
         // 工具开始：仅作前端"无活动超时"的活动信号（长工具不误超时），不改变可见消息
-        client.emit('chat.tool_start', { conversationId, toolName: chunk.toolName });
+        to.emit('chat.tool_start', { ...base, toolName: chunk.toolName });
         break;
       case 'keepalive':
         // 回合存活心跳：重置前端无活动计时器
-        client.emit('chat.keepalive', { conversationId });
+        to.emit('chat.keepalive', { ...base });
         break;
       case 'error':
         this.logger.warn(`[EMIT] error: ${chunk.error}`);
-        client.emit('chat.error', { conversationId, error: chunk.error });
+        to.emit('chat.error', { ...base, error: chunk.error });
         break;
       case 'done':
         this.logger.debug(`[EMIT] done model=${chunk.model} cost=${chunk.cost}`);
-        client.emit('chat.stream', { conversationId, delta: '', done: true, model: chunk.model, cost: chunk.cost, tokens: chunk.tokens });
+        to.emit('chat.stream', { ...base, delta: '', done: true, model: chunk.model, cost: chunk.cost, tokens: chunk.tokens });
         break;
     }
   }

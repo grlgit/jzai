@@ -35,7 +35,7 @@ describe('AppUninstallService', () => {
 
     expect(dependencies.registry.updateStatus).toHaveBeenCalledWith(appId, 'uninstalling');
     expect(dependencies.registry.updateStatus).not.toHaveBeenCalledWith(appId, 'failed');
-    expect(dependencies.activation.deactivateApp).toHaveBeenCalledWith(appId);
+    expect(dependencies.activation.deactivateApp).toHaveBeenCalledWith(appId, 'uninstall');
     expect(dependencies.activation.removeAgents).toHaveBeenCalledWith(manifest);
     expect(dependencies.activation.removeSkills).toHaveBeenCalledWith(manifest);
     expect(dependencies.activation.reloadRegistries).toHaveBeenCalled();
@@ -89,6 +89,7 @@ function createDependencies(root: string, artifactWarnings: string[] = []) {
     pools as any,
     activation as any,
     { removeForApp: jest.fn().mockResolvedValue(undefined) } as any,
+    { deleteAllSecrets: jest.fn().mockResolvedValue(undefined) } as any,
   );
 
   return { service, installDir, registry, schema, migrations, pools, activation };

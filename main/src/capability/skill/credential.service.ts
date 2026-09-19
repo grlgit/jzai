@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { WorkspaceService } from '../../workspace/workspace.service';
+import { McpHttpClient } from '../mcp/mcp-http-client';
 
 const ALGO = 'aes-256-gcm';
 const _credKeySource = process.env.CREDENTIAL_KEY || process.env.CREDENTIAL_ENCRYPTION_KEY || process.env.JWT_SECRET || '';
@@ -94,6 +95,7 @@ export class CredentialService {
     const all = this.loadAll(userId);
     all[systemName] = credentials;
     this.saveAll(userId, all);
+    McpHttpClient.clearAllSessions();
     this.logger.log(`Saved credentials for user=${userId}, system=${systemName}`);
   }
 
@@ -101,6 +103,7 @@ export class CredentialService {
     const all = this.loadAll(userId);
     delete all[systemName];
     this.saveAll(userId, all);
+    McpHttpClient.clearAllSessions();
   }
 
   listUserSystems(userId: string): Record<string, Record<string, string>> {
@@ -118,6 +121,7 @@ export class CredentialService {
     const all = this.loadAll(CredentialService.GLOBAL_USER);
     all[systemName] = credentials;
     this.saveAll(CredentialService.GLOBAL_USER, all);
+    McpHttpClient.clearAllSessions();
     this.logger.log(`Saved global credentials for system=${systemName}`);
   }
 
@@ -125,6 +129,7 @@ export class CredentialService {
     const all = this.loadAll(CredentialService.GLOBAL_USER);
     delete all[systemName];
     this.saveAll(CredentialService.GLOBAL_USER, all);
+    McpHttpClient.clearAllSessions();
   }
 
   listGlobalSystems(): Record<string, Record<string, string>> {

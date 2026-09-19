@@ -4,11 +4,13 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { WorkspaceService } from '../../workspace/workspace.service';
 import { ConnectorPermissions, ConnectorStatus } from '../tool/tool-registry.service';
+import { McpHttpClient } from './mcp-http-client';
 
 export interface McpToolDef {
   name: string;
   description: string;
   inputSchema: any;
+  outputSchema?: any;
 }
 
 export interface AuthFieldDef {
@@ -39,6 +41,7 @@ export class McpRegistryService {
   private readonly logger = new Logger(McpRegistryService.name);
   private readonly mcpDir: string;
   private servers = new Map<string, McpServerDef>();
+  private readonly changeListeners = new Set<(name?: string) => void>();
 
   constructor(private readonly workspace: WorkspaceService) {
     this.mcpDir = path.join(this.workspace.getConfigDir(), 'mcp');
@@ -46,8 +49,13 @@ export class McpRegistryService {
   }
 
   loadAll() {
+    McpHttpClient.clearAllSessions();
     this.servers.clear();
-    if (!fs.existsSync(this.mcpDir)) { fs.mkdirSync(this.mcpDir, { recursive: true }); return; }
+    if (!fs.existsSync(this.mcpDir)) {
+      fs.mkdirSync(this.mcpDir, { recursive: true });
+      this.emitChange();
+      return;
+    }
 
     const dirs = fs.readdirSync(this.mcpDir, { withFileTypes: true }).filter(d => d.isDirectory() && !d.name.startsWith('.'));
     for (const dir of dirs) {
@@ -67,8 +75,10 @@ export class McpRegistryService {
           system: m.system || '',
           description: m.description || '',
           tools: (m.tools || []).map((t: any) => ({
-            name: t.name, description: t.description || '',
+            name: t.name,
+            description: t.description || '',
             inputSchema: t.inputSchema || t.parameters || {},
+            outputSchema: t.outputSchema,
           })),
           llmHint: m.llm_hint || m.llmHint || undefined,
           handlerCode: fs.existsSync(handlerPath) ? fs.readFileSync(handlerPath, 'utf-8') : undefined,
@@ -96,12 +106,22 @@ export class McpRegistryService {
       }
     }
     this.logger.log(`Total: ${this.servers.size} MCP servers loaded`);
+    this.emitChange();
   }
 
   getBaseDir(): string { return this.mcpDir; }
   getAll(): McpServerDef[] { return Array.from(this.servers.values()); }
   getEnabled(): McpServerDef[] { return this.getAll().filter(m => m.enabled); }
   get(name: string): McpServerDef | undefined { return this.servers.get(name); }
+
+  onChange(listener: (name?: string) => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
+
+  private emitChange(name?: string): void {
+    for (const listener of this.changeListeners) listener(name);
+  }
 
   enable(name: string): boolean { return this.setEnabled(name, true); }
   disable(name: string): boolean { return this.setEnabled(name, false); }
@@ -111,6 +131,8 @@ export class McpRegistryService {
     if (!server) return false;
     server.enabled = enabled;
     this.saveYaml(server);
+    McpHttpClient.clearConnectionSessions(name);
+    this.emitChange(name);
     return true;
   }
 
@@ -127,6 +149,7 @@ export class McpRegistryService {
         fs.writeFileSync(manifestPath, yaml.dump(raw.mcp ? raw : { mcp: m }, { lineWidth: 120 }), 'utf-8');
       } catch { /* ignore */ }
     }
+    this.emitChange(name);
     return true;
   }
 
@@ -135,6 +158,8 @@ export class McpRegistryService {
     if (!server) return false;
     server.permissions = perms;
     this.saveYaml(server);
+    McpHttpClient.clearConnectionSessions(name);
+    this.emitChange(name);
     return true;
   }
 
@@ -143,14 +168,18 @@ export class McpRegistryService {
     if (server) server.status.lastUsed = new Date().toISOString();
   }
 
-  isAllowedForUser(name: string, userId: string, roleId: string): boolean {
+  isAllowedForUser(
+    name: string,
+    userId?: string,
+    roleIds: string | readonly string[] = [],
+  ): boolean {
     const server = this.servers.get(name);
     if (!server || !server.enabled) return false;
     const p = server.permissions;
     if (!p.allowedRoles?.length && !p.allowedUsers?.length) return true;
-    if (p.allowedUsers?.includes(userId)) return true;
-    if (p.allowedRoles?.includes(roleId)) return true;
-    return false;
+    if (userId && p.allowedUsers?.includes(userId)) return true;
+    const roles = typeof roleIds === 'string' ? [roleIds] : roleIds;
+    return roles.some(roleId => p.allowedRoles?.includes(roleId));
   }
 
   /** Delete an MCP server: move files to .deleted/ and remove from memory */
@@ -171,6 +200,8 @@ export class McpRegistryService {
 
     // Remove from memory
     this.servers.delete(name);
+    McpHttpClient.clearConnectionSessions(name);
+    this.emitChange(name);
     this.logger.log(`MCP deleted: ${name}`);
 
     return { success: true };
@@ -271,6 +302,8 @@ export class McpRegistryService {
     if (!fs.existsSync(p)) p = path.join(this.mcpDir, server.dirName, 'mcp-server.ts');
     fs.writeFileSync(p, code, 'utf-8');
     server.handlerCode = code;
+    McpHttpClient.clearConnectionSessions(name);
+    this.emitChange(name);
     return true;
   }
 

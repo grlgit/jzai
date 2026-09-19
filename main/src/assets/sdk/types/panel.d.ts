@@ -5,9 +5,22 @@
  * 再 import() 面板 ESM bundle，最后以 <Comp initialData onMessage sdk> 渲染。
  */
 
-/** 宿主注入的运行时。当前仅含共享 React 实例（经 react-shim 使用，一般不直接访问）。 */
+/** 面板 → Agent 结构化消息（PLAT-012）。context 可携带 scenarioId/revision 等业务引用。 */
+export interface AgentMessage {
+  text: string;
+  context?: Record<string, unknown>;
+}
+
+/** 宿主注入的运行时。react 为共享实例（经 react-shim 使用，一般不直接访问）。 */
 export interface HostSdk {
   react: any;
+  /**
+   * 向当前会话的智能体发送消息。宿主自动附加当前用户、APP、panel 与会话身份；
+   * 仅能发给面板 manifest 绑定的 Agent，面板无法指定目标或伪造用户。
+   */
+  agent?: {
+    send(msg: AgentMessage): Promise<void>;
+  };
 }
 
 /** 面板 props。泛型 T 为 agent → 面板消息的数据形状（由你的 messageSchema 校验）。 */

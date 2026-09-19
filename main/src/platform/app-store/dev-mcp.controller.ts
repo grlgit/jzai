@@ -24,11 +24,11 @@ export class DevMcpController {
   // ── token 管理（主台 JWT 鉴权，sys:admin）──
 
   @Post('token')
-  async issueToken(@Req() req: any) {
+  async issueToken(@Req() req: any, @Body() body: any) {
     this.requireAdmin(req);
-    const token = await this.devMcp.issueToken(req.user?.id ?? 'unknown');
+    const { token, tokenId } = await this.devMcp.issueToken(req.user?.id ?? 'unknown', body?.scopes);
     // token 仅在本次响应完整返回一次
-    return { token, note: '请妥善保存，仅本次完整显示；丢失请吊销后重新签发' };
+    return { token, tokenId, note: '请妥善保存，仅本次完整显示；丢失请吊销后重新签发' };
   }
 
   @Get('token')
@@ -39,9 +39,9 @@ export class DevMcpController {
   }
 
   @Delete('token')
-  async revokeToken(@Req() req: any) {
+  async revokeToken(@Req() req: any, @Body() body: any) {
     this.requireAdmin(req);
-    await this.devMcp.revokeToken(req.user?.id ?? 'unknown');
+    await this.devMcp.revokeToken(req.user?.id ?? 'unknown', body?.tokenId);
     return { ok: true };
   }
 
@@ -52,13 +52,16 @@ export class DevMcpController {
   async mcp(@Body() body: any, @Headers('authorization') auth: string) {
     if (!this.devMcp.isEnabled()) throw new NotFoundException();
     const token = auth?.startsWith('Bearer ') ? auth.slice(7) : undefined;
-    if (!(await this.devMcp.verifyToken(token))) {
+    const verified = await this.devMcp.verifyToken(token);
+    if (!verified) {
       throw new UnauthorizedException('Invalid or missing dev token');
     }
 
+    // 审计 principal 使用稳定 tokenId，绝不使用原始 token
+    const actorId = `dev-mcp:${verified.tokenId}`;
     const { id, method, params } = body ?? {};
     try {
-      const result = await this.dispatch(method, params ?? {}, token!);
+      const result = await this.dispatch(method, params ?? {}, actorId, verified.scopes);
       return { jsonrpc: '2.0', id: id ?? null, result };
     } catch (err: any) {
       return {
@@ -69,7 +72,13 @@ export class DevMcpController {
     }
   }
 
-  private async dispatch(method: string, params: any, actorId: string): Promise<unknown> {
+  private requireScope(scopes: readonly string[], scope: string) {
+    if (!scopes.includes(scope)) {
+      throw new Error(`Dev token missing required scope: ${scope}`);
+    }
+  }
+
+  private async dispatch(method: string, params: any, actorId: string, scopes: readonly string[]): Promise<unknown> {
     switch (method) {
       case 'initialize':
         return {
@@ -80,16 +89,24 @@ export class DevMcpController {
       case 'ping':
         return {};
       case 'tools/list':
+        this.requireScope(scopes, 'read');
         return { tools: await this.devMcp.listTools() };
       case 'tools/call': {
+        this.requireScope(scopes, 'invoke');
+        // 安装/升级/卸载类工具要求 manage scope（最小授权）
+        if (/install|upgrade|uninstall/i.test(String(params?.name ?? ''))) {
+          this.requireScope(scopes, 'manage');
+        }
         const result = await this.devMcp.callTool(params.name, params.arguments ?? {}, actorId);
         return {
           content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }],
         };
       }
       case 'resources/list':
+        this.requireScope(scopes, 'read');
         return { resources: await this.devMcp.listResources() };
       case 'resources/read':
+        this.requireScope(scopes, 'read');
         return { contents: [await this.devMcp.readResource(params.uri)] };
       default:
         if (method?.startsWith('notifications/')) return null;

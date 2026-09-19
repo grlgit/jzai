@@ -73,3 +73,104 @@ describe('AppValidatorService · Check 15 globalThis writes', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });
+
+describe('AppValidatorService · manifest reference closure', () => {
+  let service: AppValidatorService;
+  const emptySets = Array.from({ length: 6 }, () => new Set<string>());
+  const manifest = {
+    ...VALID_MANIFEST,
+    icon: 'assets/icon.svg',
+    migrations: [{ version: 1, file: './migrations/001.sql' }],
+    agents: [{ file: 'agents/gw_assistant.yaml' }],
+    skills: [{ dir: 'skills/gw-format' }],
+    backend: { entry: 'dist/backend/index.js', module: 'GlobalWriteModule' },
+    panels: [{
+      id: 'gwMain',
+      name: { zh: '测试' },
+      entryComponent: 'dist/pages/Main.js',
+      messageSchema: 'dist/schemas/message.js',
+      icon: 'assets/panel.svg',
+    }],
+  };
+  const files = {
+    'assets/icon.svg': '<svg/>',
+    'assets/panel.svg': '<svg/>',
+    'migrations/001.sql': 'CREATE TABLE example(id text);',
+    'agents/gw_assistant.yaml': 'agent:\n  id: gw_assistant\n  tools: []\n',
+    'skills/gw-format/SKILL.md': '---\nname: gw-format\n---\n',
+    'dist/backend/index.js': 'class GlobalWriteModule { static forApp() { return { toolProviders: [] }; } } exports.GlobalWriteModule = GlobalWriteModule;',
+    'dist/pages/Main.js': 'const Main = () => null; export { Main as default };',
+    'dist/schemas/message.js': 'export default function validate() { return true; }',
+  };
+
+  beforeEach(() => { service = new AppValidatorService(); });
+
+  async function validate(overrides: Record<string, unknown> = {}, packageFiles: Record<string, string> = files) {
+    const dir = makePkg(packageFiles, { ...manifest, ...overrides });
+    const report = await service.validate(dir, ...emptySets as any);
+    return { dir, report };
+  }
+
+  it('accepts closed references and validates backend shape without executing it', async () => {
+    const dangerousFiles = {
+      ...files,
+      'dist/backend/index.js': 'throw new Error("must not execute"); class GlobalWriteModule { static forApp() {} } exports.GlobalWriteModule = GlobalWriteModule;',
+    };
+    const { dir, report } = await validate({}, dangerousFiles);
+    expect(report.criticals).toEqual([]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('accepts a legacy skill directory reference with a trailing slash', async () => {
+    const { dir, report } = await validate({ skills: [{ dir: 'skills/gw-format/' }] });
+    expect(report.criticals).toEqual([]);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['REFERENCE_MISSING', { agents: [{ file: 'agents/missing.yaml' }] }],
+    ['REFERENCE_CASE_MISMATCH', { panels: [{ id: 'gwMain', name: { zh: '测试' }, entryComponent: 'dist/pages/main.js' }] }],
+    ['REFERENCE_PATH_TRAVERSAL', { migrations: [{ version: 1, file: '../outside.sql' }] }],
+    ['REFERENCE_ABSOLUTE_PATH', { backend: { entry: '/tmp/index.js', module: 'GlobalWriteModule' } }],
+    ['REFERENCE_WRONG_KIND', { skills: [{ dir: 'assets/icon.svg' }] }],
+  ])('rejects %s references', async (code, overrides) => {
+    const { dir, report } = await validate(overrides as Record<string, unknown>);
+    expect(report.criticals.some(result => result.code === code)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rejects symlinks without following them outside the package', async () => {
+    const { dir } = await validate();
+    const outside = path.join(os.tmpdir(), `outside-${Date.now()}.yaml`);
+    fs.writeFileSync(outside, 'agent: {}');
+    fs.rmSync(path.join(dir, 'agents', 'gw_assistant.yaml'));
+    fs.symlinkSync(outside, path.join(dir, 'agents', 'gw_assistant.yaml'));
+    const report = await service.validate(dir, ...emptySets as any);
+    expect(report.criticals.map(result => result.code)).toEqual(expect.arrayContaining(['SYMLINK_NOT_ALLOWED', 'REFERENCE_SYMLINK']));
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outside, { force: true });
+  });
+
+  it('rejects malformed backend and panel module shapes', async () => {
+    const malformed = {
+      ...files,
+      'dist/backend/index.js': 'class GlobalWriteModule { static forApp() {} }',
+      'dist/pages/Main.js': 'export const Main = () => null;',
+      'dist/schemas/message.js': 'export const validate = () => true;',
+    };
+    const { dir, report } = await validate({}, malformed);
+    expect(report.criticals.map(result => result.code)).toEqual(expect.arrayContaining([
+      'BACKEND_MODULE_SHAPE_INVALID',
+      'PANEL_ENTRY_SHAPE_INVALID',
+      'PANEL_MESSAGE_SCHEMA_SHAPE_INVALID',
+    ]));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rejects backend entries with invalid JavaScript syntax', async () => {
+    const malformed = { ...files, 'dist/backend/index.js': 'class GlobalWriteModule {' };
+    const { dir, report } = await validate({}, malformed);
+    expect(report.criticals.map(result => result.code)).toContain('BACKEND_ENTRY_SYNTAX_INVALID');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

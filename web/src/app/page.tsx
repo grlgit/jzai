@@ -88,8 +88,8 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [messages, sidebarPanels]);
 
-  // pendingInput: set by switch_agent action, consumed after agent switch completes
-  const [pendingInput, setPendingInput] = useState<string | null>(null);
+  // pendingInput: set by switch_agent action / panel agent.send, consumed after agent switch completes
+  const [pendingInput, setPendingInput] = useState<{ text: string; extraContext?: Record<string, any> } | null>(null);
 
   const [suggestions, setSuggestions] = useState<{ text: string }[]>([]);
 
@@ -311,9 +311,9 @@ export default function Home() {
     return ctx;
   }, [contentPanel, activeNav, activePdfFileId]);
 
-  const handleSend = useCallback((text: string) => {
+  const handleSend = useCallback((text: string, extraContext?: Record<string, any>) => {
     if (!chatStarted) setChatStarted(true);
-    sendMessage(text, collectPageContext());
+    sendMessage(text, { ...collectPageContext(), ...extraContext });
   }, [chatStarted, sendMessage, collectPageContext]);
 
   // Forward message after agent switch — state-driven to ensure React has finished
@@ -325,7 +325,7 @@ export default function Home() {
     const msg = pendingInput;
     setPendingInput(null);
     newSession();
-    handleSend(msg);
+    handleSend(msg.text, msg.extraContext);
   }, [pendingInput, handleSend, newSession]);
 
   // Listen for programmatic send-message events (e.g. from test button)
@@ -414,6 +414,28 @@ export default function Home() {
     }
   }, [agentList, handleNavigate, newSession]);
 
+  /**
+   * Panel → Agent 结构化通道（PLAT-012）：面板 sdk.agent.send() 的宿主侧路由。
+   * 目标 Agent 由面板绑定关系（sidebar 的 agentId，来自 manifest）决定，面板自身
+   * 不能指定目标；用户身份取自会话 JWT。绑定 Agent 与当前会话不一致时先切换再发送。
+   */
+  const handlePanelAgentMessage = useCallback((panel: { id: string; sourceAppId?: string | null; agentId?: string | null }, msg: { text: string; context?: Record<string, any> }) => {
+    const extraContext = {
+      panelContext: {
+        panelId: panel.id,
+        appId: panel.sourceAppId ?? undefined,
+        ...(msg.context ?? {}),
+      },
+    };
+    const boundAgent = panel.agentId ?? undefined;
+    if (boundAgent && boundAgent !== activeAgent) {
+      handleAgentSelect(boundAgent);
+      setPendingInput({ text: msg.text, extraContext });
+      return;
+    }
+    handleSend(msg.text, extraContext);
+  }, [activeAgent, handleAgentSelect, handleSend]);
+
   // Navigate panel only (no agent switch) — used by agent actions to avoid hijacking conversation
   const handleNavigateOnly = useCallback((id: string) => {
     if (id === 'chat') {
@@ -443,7 +465,7 @@ export default function Home() {
         case 'switch_agent':
           handleAgentSelect(actionData.target);
           if (actionData.forwardMessage) {
-            setPendingInput(actionData.forwardMessage);
+            setPendingInput({ text: actionData.forwardMessage });
           }
           break;
         case 'open_url':
@@ -640,6 +662,10 @@ export default function Home() {
                       }}
                       initialData={agentPanelData[p.id]}
                       onMessage={msg => setAgentPanelData(prev => ({ ...prev, [p.id]: msg }))}
+                      onAgentMessage={msg => handlePanelAgentMessage(
+                        { id: p.id, sourceAppId: p.sourceAppId, agentId: p.agentId },
+                        msg,
+                      )}
                     />
                   </div>
                 ))}

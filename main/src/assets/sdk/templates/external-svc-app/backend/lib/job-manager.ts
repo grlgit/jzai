@@ -84,7 +84,7 @@ export class JobManager {
 
   /** 给 LLM 的聚合摘要（受 tokenLimits 预算约束） */
   async metrics(jobId: string) {
-    const [job] = await this.app.query(
+    const { rows: [job] } = await this.app.query(
       `SELECT id, type, status, progress, metrics FROM jobs WHERE id=$1`, [jobId],
     );
     return job ?? { error: 'job not found' };
@@ -92,12 +92,12 @@ export class JobManager {
 
   /** 冲击分析 + 签发 confirmToken（绑定 scenario 与 impact 摘要，10 分钟有效） */
   async impact(scenarioId: string) {
-    const [sc] = await this.app.query(
+    const { rows: [sc] } = await this.app.query(
       `SELECT parent_id, status, metrics FROM jobs WHERE id=$1 AND type='scenario'`, [scenarioId],
     );
     if (!sc) throw new Error('scenario not found');
     if (sc.status !== 'done') return { status: sc.status, progress: undefined, hint: '预演尚未完成，稍后再查' };
-    const [base] = await this.app.query(`SELECT metrics FROM jobs WHERE id=$1`, [sc.parent_id]);
+    const { rows: [base] } = await this.app.query(`SELECT metrics FROM jobs WHERE id=$1`, [sc.parent_id]);
     const impact = diffMetrics(base?.metrics, sc.metrics);
     const token = `ct_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
     await this.app.query(
@@ -111,11 +111,11 @@ export class JobManager {
   /** 落库：必须持有效 confirmToken（LLM 只能提议，落库必经人确认） */
   async apply(scenarioId: string, token: string, userId?: string) {
     return this.app.transaction(async (tx) => {
-      const rows = await tx.query(
+      const { rows: tokens } = await tx.query(
         `DELETE FROM confirm_tokens WHERE token=$1 AND scenario_id=$2 AND expires_at > NOW()
          RETURNING impact_hash`, [token, scenarioId]);
-      if (rows.length === 0) throw new Error('confirmToken 无效或已过期——请重新预演并由用户确认');
-      const [sc] = await tx.query(
+      if (tokens.length === 0) throw new Error('confirmToken 无效或已过期——请重新预演并由用户确认');
+      const { rows: [sc] } = await tx.query(
         `SELECT solution FROM jobs WHERE id=$1 AND status='done'`, [scenarioId]);
       if (!sc) throw new Error('scenario 解不存在');
       // 把 scenario 解写回 orders（锁定计划）：示例仅标记 payload.planned

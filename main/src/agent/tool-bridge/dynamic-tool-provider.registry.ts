@@ -19,6 +19,20 @@ export class DynamicToolProviderRegistry {
   private readonly byApp = new Map<string, RegisteredProvider[]>();
   private readonly tokenLimits = new Map<string, number>();
   private readonly ownerApps = new Map<string, string>();
+  /** 正在停用（draining）的 APP：拒绝新调用，等待在途调用排空 */
+  private readonly draining = new Set<string>();
+
+  markDraining(appId: string): void {
+    this.draining.add(appId);
+  }
+
+  clearDraining(appId: string): void {
+    this.draining.delete(appId);
+  }
+
+  isDraining(appId: string): boolean {
+    return this.draining.has(appId);
+  }
 
   register(appId: string, providers: ToolProvider[], tokenLimits: TokenLimitMap = {}): void {
     const registered: RegisteredProvider[] = [];
@@ -59,6 +73,7 @@ export class DynamicToolProviderRegistry {
       }
     }
     this.byApp.delete(appId);
+    this.draining.delete(appId);
   }
 
   getAll(): ToolProvider[] {
@@ -67,6 +82,14 @@ export class DynamicToolProviderRegistry {
       result.push(...registered.map(r => r.provider));
     }
     return result;
+  }
+
+  getOwnerForProvider(provider: ToolProvider): string | undefined {
+    for (const registered of this.byApp.values()) {
+      const match = registered.find(entry => entry.provider === provider);
+      if (match) return match.appId;
+    }
+    return undefined;
   }
 
   getTokenLimit(toolName: string): number | undefined {

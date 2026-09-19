@@ -48,6 +48,7 @@ describe('AppActivationService', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+    delete (global as any).nestApp;
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -106,5 +107,68 @@ describe('AppActivationService', () => {
     expect(() => service.copyAgents({ agents: [{ file: 'agents/dt_probe.yaml' }] } as any, installDir))
       .toThrow(APP_CONFIG_ARTIFACT_PERMISSION);
     expect(fs.readFileSync(agentPath, 'utf-8')).toBe('stale agent');
+  });
+
+  it('injects the app-scoped service connection client into the backend context', async () => {
+    const entry = path.join(installDir, 'backend.js');
+    fs.writeFileSync(entry, 'module.exports = {};');
+    const connectionClient = Object.freeze({
+      listBindings: jest.fn(),
+      describe: jest.fn(),
+      invoke: jest.fn(),
+    });
+    const connectionBindings = {
+      createServiceClient: jest.fn().mockReturnValue(connectionClient),
+    };
+    const toolBridge = { callTool: jest.fn() };
+    const toolRegistry = { register: jest.fn(), registerTokenLimits: jest.fn() };
+    const loader = {
+      load: jest.fn().mockReturnValue({ moduleRef: { toolProviders: [] } }),
+    };
+    const activation = new AppActivationService(
+      {
+        findOne: jest.fn().mockResolvedValue({
+          shortName: 'probe',
+          config: {},
+        }),
+      } as any,
+      {} as any,
+      {} as any,
+      loader as any,
+      { loadAll: jest.fn() } as any,
+      {
+        getAgentsDir: jest.fn().mockReturnValue(agentsDir),
+        getConfigDir: jest.fn().mockReturnValue(configDir),
+      } as any,
+      { replaceForApp: jest.fn(), removeForApp: jest.fn() } as any,
+      { append: jest.fn(), read: jest.fn().mockReturnValue([]) } as any,
+      { buildFacade: jest.fn().mockReturnValue(undefined) } as any,
+    );
+    (global as any).nestApp = {
+      get: jest.fn((type: { name: string }) => {
+        if (type.name === 'AppConnectionBindingService') return connectionBindings;
+        if (type.name === 'ToolBridgeService') return toolBridge;
+        if (type.name === 'DynamicToolProviderRegistry') return toolRegistry;
+        return undefined;
+      }),
+    };
+    const manifest = {
+      shortName: 'probe',
+      backend: {
+        entry: 'backend.js',
+        module: 'ProbeModule',
+        toolProviders: [],
+      },
+    } as any;
+
+    await (activation as any).loadBackend('com.example.probe', installDir, manifest);
+
+    expect(connectionBindings.createServiceClient).toHaveBeenCalledWith('com.example.probe');
+    expect(loader.load).toHaveBeenCalledWith(
+      'com.example.probe',
+      entry,
+      'ProbeModule',
+      expect.objectContaining({ connections: connectionClient }),
+    );
   });
 });

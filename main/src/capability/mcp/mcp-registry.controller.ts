@@ -17,8 +17,16 @@ export class McpRegistryController {
 
   @Get()
   list(@Req() req: any) {
-    const userId = this.extractUserId(req);
-    return this.mcp.getAll().map(m => {
+    const userId = req.user?.id || this.extractUserId(req);
+    const roleIds = [
+      req.user?.role?.id,
+      ...(Array.isArray(req.user?.roles) ? req.user.roles.map((role: any) => role?.id ?? role) : []),
+    ].filter((roleId): roleId is string => typeof roleId === 'string' && roleId.length > 0);
+    const permissions = req.user?.permissions ?? req.user?.role?.permissions ?? [];
+    const isAdmin = Array.isArray(permissions) && permissions.includes('sys:admin');
+    return this.mcp.getAll()
+      .filter(m => isAdmin || this.mcp.isAllowedForUser(m.name, userId ?? undefined, roleIds))
+      .map(m => {
       const authSystem = m.authSystem || m.system || m.name;
       const basePhase = m.status.phase || 'available';
 

@@ -1,6 +1,7 @@
 import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { DbService } from '../../../db/db.service';
 import { AppRegistryService } from './app-registry.service';
+import type { InvocationPrincipal } from '../runtime/invocation-principal';
 
 export type GrantLevel = 'none' | 'user' | 'admin';
 
@@ -75,12 +76,103 @@ export class AppGrantService {
 
   /** True if the user has any non-none grant for the app. */
   async hasAppAccess(appId: string, userId: string): Promise<boolean> {
+    return this.hasAppAccessForPrincipal(appId, {
+      type: 'user',
+      principalId: `user:${userId}`,
+      userId,
+      roleIds: [],
+      departmentIds: [],
+      permissions: [],
+      scopes: [],
+      origin: 'legacy-app-grant',
+      issuedAt: Date.now(),
+    });
+  }
+
+  async hasAppAccessForPrincipal(appId: string, principal: InvocationPrincipal): Promise<boolean> {
+    if (!principal.userId) return false;
     const res = await this.db.query(
-      `SELECT 1 FROM jz_app_grants
-       WHERE app_id=$1 AND target_type='user' AND target_id=$2 AND level != 'none'
+      `SELECT 1
+       FROM jz_app_grants g
+       WHERE g.app_id=$1
+         AND g.level != 'none'
+         AND (
+           (g.target_type='user' AND g.target_id=$2)
+           OR (g.target_type='role' AND g.target_id = ANY($3::text[]))
+           OR (g.target_type='department' AND (
+             g.target_id = ANY($4::text[])
+             OR g.target_id IN (
+               SELECT dm.department_id
+               FROM jz_department_members dm
+               WHERE dm.user_id=$2
+             )
+           ))
+         )
        LIMIT 1`,
-      [appId, userId],
+      [appId, principal.userId, [...principal.roleIds], [...principal.departmentIds]],
     );
     return res.rows.length > 0;
+  }
+
+  // ── 细粒度权限（PLAT-010）──
+
+  /** manifest 中某 handler（"Class.method"）声明的 required permission，未声明返回 undefined */
+  async getRequiredHandlerPermission(appId: string, handler: string): Promise<string | undefined> {
+    const app = await this.registry.findOne(appId);
+    for (const controller of app?.manifest?.backend?.controllers ?? []) {
+      const perm = controller.permissions?.[handler];
+      if (perm) return perm;
+    }
+    return undefined;
+  }
+
+  /** manifest 中某 tool 声明的 required permission，未声明返回 undefined */
+  async getRequiredToolPermission(appId: string, toolId: string): Promise<string | undefined> {
+    const app = await this.registry.findOne(appId);
+    for (const tp of app?.manifest?.backend?.toolProviders ?? []) {
+      const perm = tp.permissions?.[toolId];
+      if (perm) return perm;
+    }
+    return undefined;
+  }
+
+  /**
+   * 判定 principal 是否持有某具体 permission。
+   * 覆盖 user/role/department 三类 target；无任何匹配授权行时按
+   * manifest.permissions[].default 判定（'user' 放行，'admin'/'none'/未设置 fail-closed，
+   * sys:admin 由调用方先行直通）。
+   */
+  async hasPermissionForPrincipal(
+    appId: string,
+    permissionId: string,
+    principal: InvocationPrincipal,
+  ): Promise<boolean> {
+    if (!principal.userId) return false;
+    const res = await this.db.query(
+      `SELECT 1
+       FROM jz_app_grants g
+       WHERE g.app_id=$1
+         AND g.permission_id=$2
+         AND g.level != 'none'
+         AND (
+           (g.target_type='user' AND g.target_id=$3)
+           OR (g.target_type='role' AND g.target_id = ANY($4::text[]))
+           OR (g.target_type='department' AND (
+             g.target_id = ANY($5::text[])
+             OR g.target_id IN (
+               SELECT dm.department_id
+               FROM jz_department_members dm
+               WHERE dm.user_id=$3
+             )
+           ))
+         )
+       LIMIT 1`,
+      [appId, permissionId, principal.userId, [...principal.roleIds], [...principal.departmentIds]],
+    );
+    if (res.rows.length > 0) return true;
+
+    const app = await this.registry.findOne(appId);
+    const declared = app?.manifest?.permissions?.find(p => p.id === permissionId);
+    return declared?.default === 'user';
   }
 }

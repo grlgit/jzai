@@ -56,7 +56,7 @@ class NoteToolProvider implements ToolProvider {
           [noteId, args.title, args.content],
         );
         // 返回给 LLM 的内容保持聚合摘要，不回灌整表
-        const [{ count }] = await this.app.query<{ count: string }>(
+        const { rows: [{ count }] } = await this.app.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM fa_notes`,
         );
         return { noteId, total: Number(count) };
@@ -70,7 +70,7 @@ class NoteController {
   constructor(private readonly app: AppContext) {}
 
   async listNotes(_body: unknown): Promise<{ notes: Note[] }> {
-    const notes = await this.app.query<Note>(
+    const { rows: notes } = await this.app.query<Note>(
       `SELECT id, title, content, created_at FROM fa_notes ORDER BY created_at DESC`,
     );
     return { notes };

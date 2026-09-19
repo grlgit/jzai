@@ -107,7 +107,20 @@ export class PanelService implements OnModuleInit {
                 g.level AS "grantRole"
          FROM jz_panels p
          LEFT JOIN jz_user_sidebar us ON us.panel_id = p.id AND us.user_id = $1
-         LEFT JOIN jz_app_grants g ON g.app_id = p.source_app_id AND g.target_type = 'user' AND g.target_id = $1
+         LEFT JOIN LATERAL (
+           SELECT g2.level FROM jz_app_grants g2
+           WHERE g2.app_id = p.source_app_id
+             AND g2.level != 'none'
+             AND (p.permission IS NULL OR g2.permission_id = p.permission)
+             AND (
+               (g2.target_type = 'user' AND g2.target_id = $1)
+               OR (g2.target_type = 'role' AND g2.target_id IN (SELECT u.role_id FROM jz_users u WHERE u.id = $1))
+               OR (g2.target_type = 'department' AND g2.target_id IN (
+                 SELECT dm.department_id FROM jz_department_members dm WHERE dm.user_id = $1
+               ))
+             )
+           LIMIT 1
+         ) g ON TRUE
          LEFT JOIN jz_installed_apps a ON a.app_id = p.source_app_id
          WHERE (p.source_app_id IS NULL OR a.status = 'active')
          ORDER BY COALESCE(us.sort_order, p.sort_order)`,
@@ -132,7 +145,20 @@ export class PanelService implements OnModuleInit {
                 g.level AS "grantRole"
          FROM jz_panels p
          LEFT JOIN jz_user_sidebar us ON us.panel_id = p.id AND us.user_id = $1
-         LEFT JOIN jz_app_grants g ON g.app_id = p.source_app_id AND g.target_type = 'user' AND g.target_id = $1
+         LEFT JOIN LATERAL (
+           SELECT g2.level FROM jz_app_grants g2
+           WHERE g2.app_id = p.source_app_id
+             AND g2.level != 'none'
+             AND (p.permission IS NULL OR g2.permission_id = p.permission)
+             AND (
+               (g2.target_type = 'user' AND g2.target_id = $1)
+               OR (g2.target_type = 'role' AND g2.target_id IN (SELECT u.role_id FROM jz_users u WHERE u.id = $1))
+               OR (g2.target_type = 'department' AND g2.target_id IN (
+                 SELECT dm.department_id FROM jz_department_members dm WHERE dm.user_id = $1
+               ))
+             )
+           LIMIT 1
+         ) g ON TRUE
          ORDER BY COALESCE(us.sort_order, p.sort_order)`,
         [userId],
       );

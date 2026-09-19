@@ -3,6 +3,7 @@ import { SkillExecutorService } from '../../capability/skill/skill-executor.serv
 import { ToolRegistryService } from '../../capability/tool/tool-registry.service';
 import { McpRegistryService } from '../../capability/mcp/mcp-registry.service';
 import { ToolBridgeService } from '../tool-bridge/tool-bridge.service';
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 
 /**
  * ToolBuilderService — legacy facade for backward compatibility.
@@ -29,12 +30,15 @@ export class ToolBuilderService {
     this.piAi = piAi;
 
     // Wire up callTool for skills: allows handler.ts to call registered MCP/Tool
-    this.skillExecutor.setToolCaller(async (toolName: string, args: Record<string, any>, userId?: string) => {
-      // Dynamically include all registered tool providers plus tools/mcp for individual selections
+    this.skillExecutor.setToolCaller(async (
+      toolName: string,
+      args: Record<string, any>,
+      principal?: InvocationPrincipal,
+    ) => {
       const providerIds = this.toolBridge.getRegisteredToolIds();
       const allTools = await this.toolBridge.buildForAgent(
         [...providerIds, 'tools', 'mcp'],
-        { userId, agentKey: '__skill__' }
+        { principal, userId: principal?.userId, agentKey: '__skill__' },
       );
       const tool = allTools.find(t => t.name === toolName);
       if (!tool) return { content: [{ type: 'text', text: `工具 "${toolName}" 未找到` }], details: null };

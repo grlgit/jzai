@@ -29,7 +29,7 @@ import { SessionController } from './session/session.controller';
 // Tool bridge
 import { ToolBridgeService } from './tool-bridge/tool-bridge.service';
 import { DynamicToolProviderRegistry } from './tool-bridge/dynamic-tool-provider.registry';
-import { TOOL_PROVIDERS } from './tool-bridge/tool-provider.interface';
+import { TOOL_BRIDGE, TOOL_PROVIDERS } from './tool-bridge/tool-provider.interface';
 import { WebToolProvider } from '../capability/builtin/web.tools';
 import { SystemToolProvider } from '../capability/builtin/system.tools';
 
@@ -81,7 +81,9 @@ import { PanelController } from './panel/panel.controller';
     // Core agent services
     ChatGateway, ChatService, DynamicAgentService, ToolBuilderService,
     // Tool bridge
-    ToolBridgeService, DynamicToolProviderRegistry,
+    ToolBridgeService,
+    { provide: TOOL_BRIDGE, useExisting: ToolBridgeService },
+    DynamicToolProviderRegistry,
     // Tool providers (agent's own)
     WebToolProvider, SystemToolProvider,
     // Context & prompt services
@@ -104,7 +106,7 @@ import { PanelController } from './panel/panel.controller';
   ],
   exports: [
     ChatService, ChatSupportModule,
-    ToolBridgeService, DynamicToolProviderRegistry, ContextPrunerService, ContextCompactorService, PromptSynthesizerService,
+    ToolBridgeService, TOOL_BRIDGE, DynamicToolProviderRegistry, ContextPrunerService, ContextCompactorService, PromptSynthesizerService,
     PanelMessageRegistry,
   ],
 })

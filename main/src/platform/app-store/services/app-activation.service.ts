@@ -8,7 +8,10 @@ import { AppRegistryService } from './app-registry.service';
 import { AppPoolService } from './app-pool.service';
 import { AppSchemaService } from './app-schema.service';
 import { DynamicModuleLoader } from '../runtime/dynamic-module.loader';
+import type { AppDeactivateReason } from '../runtime/dynamic-module.loader';
+import { CompanionServiceManager } from '../runtime/companion-service.manager';
 import { AppContext } from '../runtime/app-context';
+import { createServicePrincipal } from '../runtime/invocation-principal';
 import { DynamicToolProviderRegistry } from '../../../agent/tool-bridge/dynamic-tool-provider.registry';
 import { AgentDelegationRegistry } from '../../../agent/core/agent-delegation.registry';
 import { PanelMessageRegistry } from '../../../agent/panel/panel-message-registry.service';
@@ -20,6 +23,8 @@ import { ToolProvider } from '../../../agent/tool-bridge/tool-provider.interface
 import { AppCapabilityService } from './app-capability.service';
 import { AppLogService } from './app-log.service';
 import { AppPlatformService } from './app-platform.service';
+import { AppConnectionBindingService } from './app-connection-binding.service';
+import { AppCredentialService } from './app-credential.service';
 import { ModelRouterService } from '../../../model-router/model-router.service';
 import { ToolBridgeService } from '../../../agent/tool-bridge/tool-bridge.service';
 
@@ -53,10 +58,43 @@ export class AppActivationService {
     const apps = await this.registry.findAll();
     for (const app of apps.filter(a => a.status === 'active')) {
       try {
-        await this.activateApp(app.appId, app.installDir || '', app.manifest);
+        const installDir = await this.ensureVersionedLayout(app.appId, app.installDir || '', app.version);
+        await this.activateApp(app.appId, installDir, app.manifest);
       } catch (err: any) {
         this.logger.error(`Failed to activate app ${app.appId}: ${err.message}`);
       }
+    }
+  }
+
+  /**
+   * 旧布局兼容迁移（PLAT-009）：早期安装为 app-store/<shortName> 单目录，
+   * 现协议为 app-store/<shortName>/versions/<version>。启动时幂等搬移：
+   * 整体 rename 到临时名 → 建 versions 父目录 → rename 到位 → 更新 extract_dir。
+   * 已是版本目录布局（路径含 versions 段）或目录缺失时原样返回。
+   */
+  private async ensureVersionedLayout(appId: string, installDir: string, version: string): Promise<string> {
+    if (!installDir || installDir.split(path.sep).includes('versions')) return installDir;
+    if (!fs.existsSync(path.join(installDir, 'manifest.json'))) return installDir;
+
+    const versionDir = path.join(installDir, 'versions', version);
+    if (fs.existsSync(versionDir)) return versionDir; // 已迁移但 DB 未更新，直接采用
+
+    const parent = path.dirname(installDir);
+    const tmp = path.join(parent, `.layout-migrate-${crypto.randomBytes(4).toString('hex')}`);
+    try {
+      fs.renameSync(installDir, tmp);
+      fs.mkdirSync(path.join(installDir, 'versions'), { recursive: true });
+      fs.renameSync(tmp, versionDir);
+      await this.registry.updateManifest(appId, (await this.registry.findOne(appId))!.manifest, versionDir);
+      this.logger.log(`Migrated app ${appId} install dir to versioned layout: ${versionDir}`);
+      return versionDir;
+    } catch (err: any) {
+      // 搬移失败保底：尝试恢复原位，用旧路径激活
+      this.logger.error(`Failed to migrate install dir layout for ${appId}: ${err.message}`);
+      try {
+        if (fs.existsSync(tmp) && !fs.existsSync(installDir)) fs.renameSync(tmp, installDir);
+      } catch {}
+      return installDir;
     }
   }
 
@@ -155,11 +193,31 @@ export class AppActivationService {
     };
   }
 
-  /** Unload backend and unregister tools/panels for an app. */
-  deactivateApp(appId: string): void {
-    this.loader.unload(appId);
-    this.getToolRegistry()?.unregister(appId);
-    this.getDelegationRegistry()?.remove(appId);
+  /**
+   * Unload backend and unregister tools/panels for an app.
+   * 先进入 draining（新调用被拒绝），等待 onDeactivate 排空后卸载。
+   */
+  async deactivateApp(appId: string, reason: AppDeactivateReason = 'uninstall'): Promise<void> {
+    this.getToolRegistry()?.markDraining(appId);
+    try {
+      await this.loader.unload(appId, reason);
+      this.getToolRegistry()?.unregister(appId);
+      this.getDelegationRegistry()?.remove(appId);
+    } finally {
+      this.getToolRegistry()?.clearDraining(appId);
+      // PLAT-016：回收伴随服务（升级路径由 deactivate→activate 次序自然覆盖：
+      // 旧版本服务在此停止，新版本服务在随后的 activateApp 中拉起）。
+      try {
+        await this.getPlatformService(CompanionServiceManager)?.stopForApp(appId, reason);
+      } catch (err: any) {
+        this.logger.warn(`Failed to stop companion services for ${appId}: ${err.message}`);
+      }
+    }
+  }
+
+  /** APP 是否正在停用（draining）：invoke/tool 入口据此拒绝新调用 */
+  isDraining(appId: string): boolean {
+    return this.getToolRegistry()?.isDraining(appId) ?? false;
   }
 
   /**
@@ -314,20 +372,42 @@ export class AppActivationService {
 
     const record = await this.registry.findOne(appId);
     const toolBridge = this.getPlatformService(ToolBridgeService);
+    const connectionBindings = this.getPlatformService(AppConnectionBindingService);
+    // secret:// 引用在激活时解析为内存真值，仅存在于 APP backend 进程内存；
+    // 引用失效（已删除/错误引用）时明确失败，不静默注入 null。
+    const credentials = this.getPlatformService(AppCredentialService);
+    const rawConfig = (record?.config ?? {}) as Record<string, unknown>;
+    const config = credentials ? await credentials.resolveConfig(appId, rawConfig) : rawConfig;
+    // PLAT-016：伴随服务拉起 + 健康门 + endpoint 运行时注入（不落库）。
+    // 失败即激活失败——install 走清理路径；activateAll 记错误日志（与既有失败处理一致）。
+    const companions = this.getPlatformService(CompanionServiceManager);
+    if (companions && manifest.services?.length) {
+      const injected = await companions.startForApp({
+        appId,
+        shortName: record?.shortName ?? manifest.shortName,
+        version: manifest.version,
+        installDir,
+        services: manifest.services,
+        resolvedConfig: config as Record<string, unknown>,
+      });
+      Object.assign(config, injected);
+    }
+    const servicePrincipal = createServicePrincipal(appId, 'runtime', ['platform:tools']);
     const ctx = new AppContext(appId, undefined, {
       pools: this.pools,
-      config: (record?.config ?? {}) as Record<string, unknown>,
+      config,
       workspace: this.workspace,
       shortName: record?.shortName ?? manifest.shortName,
       modelRouter: this.getPlatformService(ModelRouterService),
       logBuffer: this.logBuffer,
       usesPlatformTools: manifest.usesPlatformTools ?? [],
       toolExecutor: toolBridge
-        ? (toolId, params) => toolBridge.callTool(toolId, params, undefined)
+        ? (toolId, params) => toolBridge.callTool(toolId, params, servicePrincipal)
         : undefined,
+      connections: connectionBindings?.createServiceClient(appId),
       platform: this.appPlatform.buildFacade(manifest),
     });
-    const loaded = this.loader.load(appId, entry, ctx);
+    const loaded = await this.loader.load(appId, entry, manifest.backend.module, ctx);
     const providers = ((loaded.moduleRef as any)?.toolProviders ?? []) as ToolProvider[];
 
     // manifest.backend.toolProviders[].tokenLimits 是声明式来源（决策 11），
@@ -339,6 +419,12 @@ export class AppActivationService {
 
     this.getToolRegistry()?.register(appId, providers, manifestTokenLimits);
     this.registerSkillTokenLimits(manifest, appId);
+
+    // 工具注册完成后再执行 onActivate（worker 恢复、lease 重建等异步初始化）
+    const onActivate = (loaded.moduleRef as { onActivate?: () => void | Promise<void> })?.onActivate;
+    if (typeof onActivate === 'function') {
+      await onActivate.call(loaded.moduleRef);
+    }
     this.logger.log(`Activated app ${appId} backend with ${providers.length} tool provider(s)`);
   }
 

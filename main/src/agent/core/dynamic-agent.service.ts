@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit, Optional, Inject, forwardRef } from '@nestjs/common';
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 import { loadPiAi, loadPiAgent } from '../../pi';
 import type { AgentEvent as PiAgentEvent } from '../../pi';
 import { AgentRegistryService, AgentDef } from './agent-registry.service';
@@ -215,14 +216,14 @@ export class DynamicAgentService implements OnModuleInit {
    * Pre-warm the main agent for a user so the first message is fast.
    * Called on WebSocket connect (fire-and-forget).
    */
-  async warmupAgent(userId: string, sessionId?: string) {
+  async warmupAgent(userId: string, sessionId?: string, principal?: InvocationPrincipal) {
     const mainDef = this.registry.get('main');
     if (!mainDef) return;
     const sid = sessionId || 'default';
     const key = `${mainDef.id}_${sid}`;
     if (this.agentPool.has(key)) return; // already warm
     try {
-      await this.getOrCreateAgent(mainDef, sid, userId);
+      await this.getOrCreateAgent(mainDef, sid, userId, undefined, principal);
       this.logger.log(`Agent pre-warmed for user ${userId}`);
     } catch (err: any) {
       this.logger.warn(`Agent warmup failed: ${err.message}`);
@@ -234,6 +235,7 @@ export class DynamicAgentService implements OnModuleInit {
     pageContext?: { panel?: string; title?: string; nav?: string; url?: string; labels?: string[]; pdfFileId?: string; oemDataSources?: { mcp_name: string; label?: string; schema_hint?: string }[] },
     attachments?: { filePath: string; fileName: string }[],
     userEmail?: string,
+    principal?: InvocationPrincipal,
   ): AsyncGenerator<StreamChunk> {
     const agentKey = `${agentId}_${sessionId}`;
 
@@ -260,7 +262,7 @@ export class DynamicAgentService implements OnModuleInit {
       } catch { /* if check fails, proceed and let proxy decide */ }
     }
 
-    let agent = await this.getOrCreateAgent(agentDef, sessionId, userId, userEmail);
+    let agent = await this.getOrCreateAgent(agentDef, sessionId, userId, userEmail, principal);
     const chunks: StreamChunk[] = [];
     let resolveNext: (() => void) | null = null;
     let done = false;
@@ -572,7 +574,7 @@ export class DynamicAgentService implements OnModuleInit {
         unsubscribe();
         this.agentPool.remove(agentKey);
         this.contextManager.removeSession(agentKey);
-        agent = await this.getOrCreateAgent(agentDef, 'fresh_' + Date.now(), userId, userEmail);
+        agent = await this.getOrCreateAgent(agentDef, 'fresh_' + Date.now(), userId, userEmail, principal);
         unsubscribe = agent.subscribe(async (event: PiAgentEvent) => {
           const now = Date.now();
           lastEventTime = now;
@@ -790,12 +792,22 @@ export class DynamicAgentService implements OnModuleInit {
     return this.registry.get(agentId)?.sessionConfig?.reuseWindowMinutes ?? 10;
   }
 
-  private async getOrCreateAgent(def: AgentDef, sessionId: string, userId: string, userEmail?: string): Promise<any> {
+  private async getOrCreateAgent(
+    def: AgentDef,
+    sessionId: string,
+    userId: string,
+    userEmail?: string,
+    principal?: InvocationPrincipal,
+  ): Promise<any> {
     const key = `${def.id}_${sessionId}`;
     if (this.agentPool.has(key)) return this.agentPool.get(key)!;
 
     const model = this.modelRouter.resolveModelForLevel(def.modelLevel);
-    const tools = await this.toolBridge.buildForAgent(def.tools, { userId, agentKey: key, userEmail }, def.context?.maxToolOutputChars);
+    const tools = await this.toolBridge.buildForAgent(
+      def.tools,
+      { principal, userId, agentKey: key, userEmail },
+      def.context?.maxToolOutputChars,
+    );
 
     // Inject user identity headers for community edition LLM proxy tracking
     const userName = this.analytics.getUserName(userId) || userId;

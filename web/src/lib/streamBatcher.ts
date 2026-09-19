@@ -8,6 +8,8 @@
 export interface StreamBatcher {
   /** Append a delta to the internal buffer and schedule a flush. */
   onDelta(delta: string): void;
+  /** Seed the buffer with existing text (session re-attach recovery), so subsequent flushes build on it instead of overwriting. */
+  seed(text: string): void;
   /** Immediately flush the buffer to the UI and return the current text. */
   flush(): string;
   /** Clear the internal buffer without writing to the UI. */
@@ -64,7 +66,11 @@ export function createStreamBatcher(
     buffer = '';
   };
 
+  const seed = (text: string) => {
+    buffer = text;
+  };
+
   const getBuffer = () => buffer;
 
-  return { onDelta, flush, reset, getBuffer };
+  return { onDelta, flush, reset, seed, getBuffer };
 }

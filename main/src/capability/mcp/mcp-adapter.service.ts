@@ -2,6 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ToolProvider, ToolContext, ToolInstance, ToolCatalogEntry } from '../../agent/tool-bridge/tool-provider.interface';
 import { McpRegistryService } from '../mcp/mcp-registry.service';
 import { CredentialService } from '../skill/credential.service';
+import {
+  normalizeInvocationPrincipal,
+  principalHasScope,
+  principalIsExpired,
+} from '../../platform/app-store/runtime/invocation-principal';
 
 /**
  * McpAdapterService — dynamically creates mcp_* prefixed tools from the MCP registry.
@@ -26,16 +31,22 @@ export class McpAdapterService implements ToolProvider {
     if (!Type) return [];
 
     const allTools: ToolInstance[] = [];
-    const userId = ctx.userId;
+    const principal = ctx.principal ?? normalizeInvocationPrincipal(ctx.userId, 'legacy-mcp');
+    const userId = principal?.userId;
+    const roleIds = principal?.roleIds ?? [];
 
     for (const m of this.mcpRegistry.getEnabled()) {
-      // Skip MCPs still being built (no tools or no handler)
       if (m.tools.length === 0 || !m.handlerCode) continue;
 
       const authSystem = m.authSystem || m.system || m.name;
       const needsAuth = m.authFields && m.authFields.length > 0;
 
       for (const t of m.tools) {
+        const hasBoundServiceCapability = principal?.type === 'service'
+          && principalHasScope(principal, `mcp:${m.name}:${t.name}:invoke`);
+        const canInvoke = () => hasBoundServiceCapability
+          || this.mcpRegistry.isAllowedForUser(m.name, userId, roleIds);
+        if (!canInvoke()) continue;
         const paramProps: Record<string, any> = {};
         if (t.inputSchema?.properties) {
           for (const [k, def] of Object.entries(t.inputSchema.properties as Record<string, any>)) {
@@ -53,6 +64,12 @@ export class McpAdapterService implements ToolProvider {
           description: m.llmHint ? `${t.description}\n\n## 调用说明\n${m.llmHint}` : t.description,
           parameters: Type.Object(paramProps) as any,
           execute: async (_id: string, args: Record<string, any>) => {
+            if ((principal && principalIsExpired(principal)) || !canInvoke()) {
+              return {
+                content: [{ type: 'text' as const, text: `Forbidden: no access to MCP ${m.name}` }],
+                details: { __error: { code: 'FORBIDDEN', message: `No access to MCP ${m.name}` } },
+              };
+            }
             // Auto-parse string args that should be objects/arrays (LLM may serialize JSON as string)
             if (t.inputSchema?.properties) {
               for (const [k, def] of Object.entries(t.inputSchema.properties as Record<string, any>)) {
@@ -77,19 +94,42 @@ export class McpAdapterService implements ToolProvider {
               let code = m.handlerCode!.replace(/import\s+.*?from\s+.*?;?\n?/g, '').replace(/export\s+/g, '').replace(/:\s*(any|string|number|boolean|void|Record<[^>]+>|Promise<[^>]+>)\s*/g, ' ');
               const fn = new Function('require', 'ctx', `return (async function() { ${code} return execute(ctx); })();`);
               const { McpHttpClient } = require('./mcp-http-client');
-              const httpClient = new McpHttpClient(userId);
-              const handlerCtx = { params: args, tool: t.name, toolName: t.name, userId, credentials: userCredentials || {}, http: httpClient };
+              const httpClient = new McpHttpClient(principal?.principalId ?? userId, m.name);
+              const handlerCtx = {
+                params: args,
+                tool: t.name,
+                toolName: t.name,
+                userId,
+                principal,
+                credentials: userCredentials || {},
+                http: httpClient,
+              };
               const result = await fn(require, handlerCtx);
               const resultText = (result.data && result.message) ? `${result.message}\n${JSON.stringify(result.data, null, 2)}` : (result.message || JSON.stringify(result));
               this.logger.debug(`MCP ${m.name}/${t.name} result: ${resultText.substring(0, 200)}`);
-              // If MCP handler returned failure, add guardrail instruction
-              if (result.success === false || resultText.includes('失败') || resultText.includes('failed') || resultText.includes('error')) {
-                return { content: [{ type: 'text' as const, text: `${resultText}` }], details: null };
+              if (result.success === false) {
+                return {
+                  content: [{ type: 'text' as const, text: resultText }],
+                  details: {
+                    __error: {
+                      code: result.code || 'MCP_HANDLER_ERROR',
+                      message: result.message || 'MCP handler reported failure',
+                    },
+                  },
+                };
               }
               return { content: [{ type: 'text' as const, text: resultText }], details: null };
             } catch (err: any) {
               this.logger.warn(`MCP ${m.name}/${t.name} error: ${err.message}`);
-              return { content: [{ type: 'text' as const, text: `MCP工具执行失败: ${err.message}` }], details: null };
+              return {
+                content: [{ type: 'text' as const, text: `MCP工具执行失败: ${err.message}` }],
+                details: {
+                  __error: {
+                    code: 'MCP_EXECUTION_ERROR',
+                    message: err.message,
+                  },
+                },
+              };
             }
           },
         });

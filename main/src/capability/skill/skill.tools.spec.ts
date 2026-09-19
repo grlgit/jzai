@@ -1,4 +1,5 @@
 import { SkillToolProvider } from './skill.tools';
+import { createUserPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 
 const mockSkillRegistry = {
   getAll: () => [{ name: 'test', description: 'Test skill', confirmForm: [] }],
@@ -25,6 +26,10 @@ describe('SkillToolProvider', () => {
     mockMcpRegistry as any, mockAgentPool as any, mockSession as any, mockConfirm as any,
   );
 
+  beforeEach(() => {
+    mockSkillExecutor.execute.mockClear();
+  });
+
   test('toolIds has 5 entries', () => {
     expect(provider.toolIds).toHaveLength(5);
   });
@@ -48,5 +53,43 @@ describe('SkillToolProvider', () => {
   test('createTools returns empty when no piAi.Type', async () => {
     const tools = await provider.createTools({});
     expect(tools).toHaveLength(0);
+  });
+
+  test('passes the complete invocation principal to a nested skill execution', async () => {
+    const principal = createUserPrincipal({
+      id: 'user-1',
+      role: { id: 'planner', permissions: ['cfg:model'] },
+      departmentIds: ['operations'],
+      tokenId: 'token-1',
+      issuedAt: 1000,
+      expiresAt: 9999999999999,
+    }, 'agent:test');
+    const tools = await provider.createTools({ piAi: { Type: mockType }, principal });
+    const skill = tools.find(tool => tool.name === 'skill_test');
+
+    await skill!.execute('call-1', { input: 'payload' });
+
+    expect(mockSkillExecutor.execute).toHaveBeenCalledWith(
+      'test',
+      { input: 'payload' },
+      principal,
+    );
+  });
+
+  test('passes the complete invocation principal through test_skill', async () => {
+    const principal = createUserPrincipal({
+      id: 'user-1',
+      role: { id: 'planner', permissions: ['cfg:model'] },
+    }, 'agent:test');
+    const tools = await provider.createTools({ piAi: { Type: mockType }, principal });
+    const testSkill = tools.find(tool => tool.name === 'test_skill');
+
+    await testSkill!.execute('call-1', { skillName: 'test', testParams: { value: 1 } });
+
+    expect(mockSkillExecutor.execute).toHaveBeenCalledWith(
+      'test',
+      { value: 1 },
+      principal,
+    );
   });
 });

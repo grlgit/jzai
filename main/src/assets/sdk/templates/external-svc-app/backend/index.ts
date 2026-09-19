@@ -140,7 +140,7 @@ class ScheduleController {
   /** 面板轮询：含全量 solution（面板专用，不经 LLM） */
   async getJob(body: { jobId?: string }) {
     if (!body?.jobId) throw new Error('jobId 不能为空');
-    const [job] = await this.app.query(
+    const { rows: [job] } = await this.app.query(
       `SELECT id, type, status, progress, solution, metrics, created_at, finished_at
        FROM jobs WHERE id=$1`, [body.jobId],
     );
@@ -167,7 +167,7 @@ class ScheduleController {
   }
 
   async listOrders(_body: unknown) {
-    const orders = await this.app.query(
+    const { rows: orders } = await this.app.query(
       `SELECT id, payload, confirmed, synced_at FROM orders ORDER BY id LIMIT 200`);
     return { orders };
   }

@@ -67,27 +67,50 @@ export class AppMigrationService {
     return { toRun, irreversibleVersions };
   }
 
-  /** Execute migrations in a single transaction using the app's role connection */
+  /**
+   * Execute pending migrations. 状态协议（PLAT-009）：
+   * 1. 平台连接先写 journal 行 status='applying'；
+   * 2. APP 角色事务执行迁移 SQL；
+   * 3. 平台连接置 status='applied'。
+   * 进程在 1~3 之间中断会留下 'applying' 行；下次执行时对该版本重放 SQL
+   * （迁移 SQL 必须幂等，如使用 IF NOT EXISTS）再置 applied。
+   */
   async up(appId: string, plan: MigrationPlan, extractDir: string): Promise<void> {
     if (plan.toRun.length === 0) return;
 
-    await this.poolService.transaction(appId, async client => {
-      for (const entry of plan.toRun) {
-        const filePath = path.join(extractDir, entry.file);
-        const sql = fs.readFileSync(filePath, 'utf-8');
-        await client.query(sql);
-        this.logger.log(`App ${appId}: applied migration v${entry.version}`);
-      }
-    });
+    const interrupted = new Set(await this.getInterruptedVersions(appId));
 
-    // Record all applied migrations (use platform connection — jz_app_migrations is in public schema)
     for (const entry of plan.toRun) {
+      if (!interrupted.has(entry.version)) {
+        await this.db.query(
+          `INSERT INTO jz_app_migrations (app_id, version, checksum, status)
+           VALUES ($1, $2, $3, 'applying')
+           ON CONFLICT (app_id, version) DO NOTHING`,
+          [appId, entry.version, entry.checksum],
+        );
+      } else {
+        this.logger.warn(`App ${appId}: replaying interrupted migration v${entry.version} (requires idempotent SQL)`);
+      }
+
+      const filePath = path.join(extractDir, entry.file);
+      const sql = fs.readFileSync(filePath, 'utf-8');
+      await this.poolService.transaction(appId, async client => {
+        await client.query(sql);
+      });
+
       await this.db.query(
-        `INSERT INTO jz_app_migrations (app_id, version, checksum, applied_at)
-         VALUES ($1, $2, $3, NOW())`,
+        `UPDATE jz_app_migrations SET status='applied', checksum=$3, applied_at=NOW()
+         WHERE app_id=$1 AND version=$2`,
         [appId, entry.version, entry.checksum],
       );
+      this.logger.log(`App ${appId}: applied migration v${entry.version}`);
     }
+  }
+
+  /** 当前已应用的最高迁移版本（升级回滚基线） */
+  async getCurrentVersion(appId: string): Promise<number> {
+    const applied = await this.getApplied(appId);
+    return applied.reduce((max, r) => Math.max(max, r.version), 0);
   }
 
   /** Rollback migrations down to `toVersion` (exclusive) using declared down files */
@@ -99,27 +122,25 @@ export class AppMigrationService {
 
     const entries = manifest.migrations ?? [];
 
-    await this.poolService.transaction(appId, async client => {
-      for (const record of toRollback) {
-        const entry = entries.find(e => e.version === record.version);
-        if (!entry?.down) {
-          throw new Error(
-            `Migration version ${record.version} of app "${appId}" has no down file declared. Cannot rollback.`,
-          );
-        }
-        const downPath = path.join(extractDir, entry.down);
-        const sql = fs.readFileSync(downPath, 'utf-8');
-        await client.query(sql);
-        this.logger.log(`App ${appId}: rolled back migration v${record.version}`);
-      }
-    });
-
-    // Delete migration records from platform table
+    // 逐个回滚：先执行 down SQL，再删 journal 行。
+    // 进程在两者之间中断时 journal 行保留，重试会重放 down SQL（须幂等）。
     for (const record of toRollback) {
+      const entry = entries.find(e => e.version === record.version);
+      if (!entry?.down) {
+        throw new Error(
+          `Migration version ${record.version} of app "${appId}" has no down file declared. Cannot rollback.`,
+        );
+      }
+      const downPath = path.join(extractDir, entry.down);
+      const sql = fs.readFileSync(downPath, 'utf-8');
+      await this.poolService.transaction(appId, async client => {
+        await client.query(sql);
+      });
       await this.db.query(
         `DELETE FROM jz_app_migrations WHERE app_id = $1 AND version = $2`,
         [appId, record.version],
       );
+      this.logger.log(`App ${appId}: rolled back migration v${record.version}`);
     }
   }
 
@@ -130,10 +151,19 @@ export class AppMigrationService {
 
   private async getApplied(appId: string): Promise<MigrationRecord[]> {
     const { rows } = await this.db.query(
-      `SELECT version, checksum, applied_at as "appliedAt" FROM jz_app_migrations WHERE app_id = $1 ORDER BY version`,
+      `SELECT version, checksum, applied_at as "appliedAt" FROM jz_app_migrations
+       WHERE app_id = $1 AND status = 'applied' ORDER BY version`,
       [appId],
     );
     return rows;
+  }
+
+  private async getInterruptedVersions(appId: string): Promise<number[]> {
+    const { rows } = await this.db.query(
+      `SELECT version FROM jz_app_migrations WHERE app_id = $1 AND status = 'applying'`,
+      [appId],
+    );
+    return rows.map((r: { version: number }) => r.version);
   }
 
   private hashFile(filePath: string): string {

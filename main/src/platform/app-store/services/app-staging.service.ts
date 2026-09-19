@@ -2,10 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
-import extractZip from 'extract-zip';
 import { AppManifestSchema } from '../validators/manifest.schema';
 import { AppValidatorService } from '../validators/app-validator.service';
 import { AppRegistryService } from './app-registry.service';
+import { SafeArchiveService } from './safe-archive.service';
 import {
   AppInstallOperationService,
   AppInstallOperationStatus,
@@ -19,6 +19,7 @@ export class AppStagingService {
     private readonly validator: AppValidatorService,
     private readonly registry: AppRegistryService,
     private readonly operations: AppInstallOperationService,
+    private readonly archives: SafeArchiveService,
   ) {}
 
   start(packagePath: string): AppInstallOperationStatus {
@@ -31,10 +32,9 @@ export class AppStagingService {
     let stageDir: string | undefined;
     try {
       stageDir = path.join(os.tmpdir(), `jzapp_stage_${stageId}`);
-      fs.mkdirSync(stageDir, { recursive: true });
       this.operations.setStageDir(stageId, stageDir);
       this.operations.update(stageId, 'unpacking', 15, '正在解包应用包…');
-      await extractZip(packagePath, { dir: stageDir });
+      await this.archives.extract(packagePath, stageDir);
 
       this.operations.update(stageId, 'validating', 30, '正在校验应用包…');
       const ids = await this.registry.getExistingIds();

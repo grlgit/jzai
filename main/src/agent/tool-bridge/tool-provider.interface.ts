@@ -1,3 +1,5 @@
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
+
 /**
  * ToolProvider interface — implemented by each domain's *.tools.ts.
  * ToolBridgeService collects all providers and builds tool sets for agents.
@@ -22,11 +24,19 @@ export interface ToolCatalogEntry {
   group: string;
 }
 
+export interface AppConnectionClient {
+  listBindings(): Promise<unknown[]>;
+  describe(bindingId: string): Promise<unknown>;
+  invoke(bindingId: string, params: unknown): Promise<unknown>;
+}
+
 export interface ToolContext {
+  principal?: InvocationPrincipal;
   userId?: string;
   agentKey?: string;
   userEmail?: string;
   piAi?: any;
+  connections?: AppConnectionClient;
 }
 
 export interface ToolInstance {
@@ -39,3 +49,4 @@ export interface ToolInstance {
 
 /** DI injection token for multi-provider collection */
 export const TOOL_PROVIDERS = 'TOOL_PROVIDERS';
+export const TOOL_BRIDGE = 'TOOL_BRIDGE';

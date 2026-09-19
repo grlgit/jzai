@@ -2,6 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { SkillRegistryService, SkillDefinition } from './skill-registry.service';
 import { CredentialService } from './credential.service';
 import { ToolErrorCode } from '../../agent/tool-bridge/tool-error';
+import type {
+  InvocationPrincipal,
+  InvocationPrincipalInput,
+} from '../../platform/app-store/runtime/invocation-principal';
+import { normalizeInvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 import * as http from 'http';
 import * as https from 'https';
 import * as url from 'url';
@@ -27,7 +32,11 @@ export interface SkillResult {
   details?: any;
 }
 
-export type ToolCallerFn = (toolName: string, args: Record<string, any>, userId?: string) => Promise<any>;
+export type ToolCallerFn = (
+  toolName: string,
+  args: Record<string, any>,
+  principal?: InvocationPrincipal,
+) => Promise<any>;
 
 /**
  * Simple HTTP client that preserves cookies across requests
@@ -117,9 +126,15 @@ export class SkillExecutorService {
   /** Set by ToolBuilderService after init to avoid circular dependency */
   setToolCaller(fn: ToolCallerFn) { this.toolCaller = fn; }
 
-  async execute(skillName: string, params: Record<string, any>, userId?: string): Promise<SkillResult> {
+  async execute(
+    skillName: string,
+    params: Record<string, any>,
+    principalInput?: InvocationPrincipalInput,
+  ): Promise<SkillResult> {
     const skill = this.registry.get(skillName);
     if (!skill) return { success: false, message: `技能未找到: ${skillName}` };
+    const principal = normalizeInvocationPrincipal(principalInput, `skill:${skillName}`);
+    const userId = principal?.userId;
 
     // Resolve credentials: user → global → empty
     const credSystem = skill.metadata?.system || skill.name;
@@ -139,7 +154,7 @@ export class SkillExecutorService {
         return { success: false, message: '工具调用能力未初始化' };
       }
       this.logger.debug(`Skill ${skillName} → callTool: ${toolName}`);
-      return this.toolCaller(toolName, args, userId);
+      return this.toolCaller(toolName, args, principal);
     };
 
     const httpClient = new HttpClient();
@@ -183,9 +198,12 @@ export class SkillExecutorService {
     return fn(require, ctx);
   }
 
-  async test(skillName: string): Promise<SkillResult> {
+  async test(
+    skillName: string,
+    principalInput?: InvocationPrincipalInput,
+  ): Promise<SkillResult> {
     const skill = this.registry.get(skillName);
     if (!skill) return { success: false, message: `技能未找到: ${skillName}` };
-    return this.execute(skillName, { input: '测试调用' });
+    return this.execute(skillName, { input: '测试调用' }, principalInput);
   }
 }

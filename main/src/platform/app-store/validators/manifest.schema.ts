@@ -29,6 +29,8 @@ const toolProviderSchema = z.object({
   toolIds: z.array(z.string()),
   group: z.string().optional(),
   tokenLimits: z.record(z.string(), z.number().int().positive().max(512000)).optional(),
+  /** 逐工具权限声明：toolId → manifest.permissions[].id（PLAT-010） */
+  permissions: z.record(z.string(), z.string()).optional(),
   /** 声明这些工具经 MCP facade 对外暴露（仅首方 appId 可通过校验）。缺省 false */
   mcpExposed: z.boolean().optional(),
 });
@@ -38,6 +40,8 @@ const controllerSchema = z.object({
   /** 允许经 invoke 入口调用的方法白名单，格式 "ClassName.methodName" */
   handlers: z.array(z.string()).min(1),
   basePath: z.string().optional(),
+  /** 逐 handler 权限声明："ClassName.methodName" → manifest.permissions[].id（PLAT-010） */
+  permissions: z.record(z.string(), z.string()).optional(),
 });
 
 const configFieldSchema = z.object({
@@ -56,6 +60,47 @@ const agentDelegationSchema = z.object({
   keywords: z.array(z.string()).min(1),
   fromAgent: z.string().default('main'),
   description: z.string().optional(),
+});
+
+/**
+ * 伴随服务声明（PLAT-016）：APP 包携带的长驻服务制品，由平台在安装/激活时拉起、
+ * 健康检查、随 deactivate/upgrade/uninstall 回收。制品是 APP 内容，不进标准产品。
+ *
+ * - runtime=process：依赖已存在于平台运行环境时直接 spawn（cwd 为包内相对目录）；
+ * - runtime=container：docker 可用时以包内 Dockerfile 构建或指定镜像跑 sidecar 容器；
+ * - 模板变量：command/env/inject 中可用 {port}（process=平台分配的 loopback 端口，
+ *   container=containerPort）与 {host}（process=127.0.0.1，container=容器名）；
+ * - env 值 {secret:<key>} 复用 configSchema secret 字段的 credential store 语义；
+ * - inject 的 "config.<key>" 在激活时把实际 endpoint 写入 APP config（运行时注入，不落库）。
+ */
+const companionServiceSchema = z.object({
+  id: z.string().regex(/^[a-z][a-zA-Z0-9]{0,31}$/),
+  runtime: z.enum(['process', 'container']),
+  /** 包内相对目录（process=工作目录；container=构建上下文，须含 Dockerfile 当未指定 image） */
+  cwd: z.string(),
+  /** process 形态必填；支持 {port}/{host} 模板 */
+  command: z.array(z.string()).optional(),
+  /** container 形态：预构建镜像（与 Dockerfile 构建二选一） */
+  image: z.string().optional(),
+  /** container 形态：容器内服务端口 */
+  containerPort: z.number().int().positive().max(65535).optional(),
+  env: z.record(z.string(), z.string()).optional(),
+  health: z
+    .object({
+      path: z.string().regex(/^\//).default('/health'),
+      intervalSec: z.number().positive().max(300).optional().default(5),
+      timeoutSec: z.number().positive().max(600).optional().default(60),
+    })
+    .optional(),
+  inject: z.record(z.string().regex(/^config\.[a-zA-Z][a-zA-Z0-9_]{0,31}$/), z.string()).optional(),
+  resources: z
+    .object({
+      cpuMillis: z.number().int().positive().max(64000).optional(),
+      memoryMb: z.number().int().positive().max(65536).optional(),
+    })
+    .optional(),
+  /** 崩溃重启上限（默认 5，指数退避） */
+  maxRestarts: z.number().int().positive().max(20).optional().default(5),
 });
 
 export const AppManifestSchema = z.object({
@@ -131,6 +176,8 @@ export const AppManifestSchema = z.object({
     .optional(),
   panels: z.array(panelSchema).optional(),
   agentDelegation: z.array(agentDelegationSchema).optional(),
+  /** 伴随服务声明（PLAT-016） */
+  services: z.array(companionServiceSchema).optional(),
 });
 
 export type AppManifest = z.infer<typeof AppManifestSchema>;

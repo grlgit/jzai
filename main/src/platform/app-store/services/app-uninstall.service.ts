@@ -8,6 +8,7 @@ import { AppMigrationService } from './app-migration.service';
 import { AppPoolService } from './app-pool.service';
 import { AppActivationService } from './app-activation.service';
 import { AppCapabilityService } from './app-capability.service';
+import { AppCredentialService } from './app-credential.service';
 
 @Injectable()
 export class AppUninstallService {
@@ -21,6 +22,7 @@ export class AppUninstallService {
     private readonly pools: AppPoolService,
     private readonly activation: AppActivationService,
     private readonly capabilities: AppCapabilityService,
+    private readonly credentials: AppCredentialService,
   ) {}
 
   async uninstall(appId: string, opts: { purgeData?: boolean } = {}): Promise<void> {
@@ -31,7 +33,7 @@ export class AppUninstallService {
 
     try {
       // 1. Deactivate backend and unregister tools
-      this.activation.deactivateApp(appId);
+      await this.activation.deactivateApp(appId, 'uninstall');
 
       // 2. Remove panels and configuration artifacts
       await this.activation.removePanels(appId);
@@ -72,6 +74,8 @@ export class AppUninstallService {
 
       // 6. Preserve recovery metadata unless all app data was explicitly purged
       if (opts.purgeData) {
+        // 彻底删除：连同 credential store 中的 APP secret 一并清除
+        await this.credentials.deleteAllSecrets(appId);
         await this.registry.delete(appId);
       } else {
         await this.registry.updateStatus(appId, 'uninstalled');

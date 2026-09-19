@@ -48,6 +48,8 @@ try {
 
     // 只清理各依赖包根目录下一层的同名目录，绝不递归进包内部（教训：exceljs/lib/doc 曾被误删）
     const nmRoot = join(stagingDir, 'node_modules');
+    // npm executable shims are symlinks and are never needed by app runtime code.
+    rmSync(join(nmRoot, '.bin'), { recursive: true, force: true });
     const pruneNames = new Set(['test', 'tests', 'docs', 'doc', 'examples', 'example', 'demos', 'demo', 'benchmarks', 'website', '.github', '.git']);
     const pkgDirs = [];
     for (const entry of readdirSync(nmRoot, { withFileTypes: true })) {

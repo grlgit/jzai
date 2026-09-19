@@ -12,6 +12,7 @@ import { ToolBridgeService } from '../../../agent/tool-bridge/tool-bridge.servic
 import { AppCapabilityService } from './app-capability.service';
 import type { AppInstallService } from './app-install.service';
 import type { AppUpgradeService } from './app-upgrade.service';
+import { createServicePrincipal } from '../runtime/invocation-principal';
 
 /**
  * AppInstallService/AppUpgradeService 与 AppActivationService 存在构造期循环
@@ -75,8 +76,9 @@ export class AppPlatformService {
       facade.validatePackage = files => this.validatePackage(files);
       facade.listPlatformTools = () => this.listPlatformTools();
       facade.describeTool = toolId => this.describeTool(toolId);
+      const principal = createServicePrincipal(manifest.appId, 'app-platform', ['app:invoke']);
       facade.callTool = (toolId, params) =>
-        this.moduleRef.get(ToolBridgeService, { strict: false }).callTool(toolId, params, undefined);
+        this.moduleRef.get(ToolBridgeService, { strict: false }).callTool(toolId, params, principal);
     }
     if (caps.includes('appstore:read-logs')) {
       facade.readLogs = (appId, since) => Promise.resolve(this.logs.read(appId, since ?? 0));
@@ -185,11 +187,25 @@ export class AppPlatformService {
   // ── 工具方法 ──
 
   private async writeFiles(dir: string, files: Record<string, string>): Promise<void> {
-    for (const [rel, content] of Object.entries(files)) {
-      const target = path.resolve(dir, rel);
-      if (!target.startsWith(path.resolve(dir) + path.sep)) {
+    const entries = Object.entries(files);
+    if (entries.length > 5000) throw new Error('Too many files: maximum is 5000');
+    const totalBytes = entries.reduce((sum, [, content]) => sum + Buffer.byteLength(content, 'utf-8'), 0);
+    if (totalBytes > 200 * 1024 * 1024) throw new Error('File content exceeds 200MB limit');
+
+    const seen = new Map<string, string>();
+    for (const [rel, content] of entries) {
+      if (!rel || rel.includes('\0') || rel.includes('\\') || path.posix.isAbsolute(rel)
+        || path.win32.isAbsolute(rel) || rel.split('/').includes('..')) {
         throw new Error(`Illegal file path: ${rel}`);
       }
+      const normalized = path.posix.normalize(rel);
+      const lower = normalized.toLocaleLowerCase('en-US');
+      const previous = seen.get(lower);
+      if (previous) throw new Error(`Duplicate or case-conflicting file path: ${previous} / ${rel}`);
+      seen.set(lower, normalized);
+
+      const target = path.resolve(dir, normalized);
+      if (!target.startsWith(path.resolve(dir) + path.sep)) throw new Error(`Illegal file path: ${rel}`);
       await fs.promises.mkdir(path.dirname(target), { recursive: true });
       await fs.promises.writeFile(target, content);
     }

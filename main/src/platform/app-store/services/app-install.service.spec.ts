@@ -55,7 +55,7 @@ describe('AppInstallService', () => {
     await expect(dependencies.service.installFromStage(stageDir)).rejects.toBe(activationError);
 
     const normalizedManifest = expect.objectContaining({ appId: manifest.appId });
-    expect(dependencies.activation.deactivateApp).toHaveBeenCalledWith(manifest.appId);
+    expect(dependencies.activation.deactivateApp).toHaveBeenCalledWith(manifest.appId, 'uninstall');
     expect(dependencies.activation.removePanels).toHaveBeenCalledWith(manifest.appId);
     expect(dependencies.activation.removeAgents).toHaveBeenCalledWith(normalizedManifest);
     expect(dependencies.activation.removeSkills).toHaveBeenCalledWith(normalizedManifest);
@@ -242,6 +242,7 @@ function createDependencies(workspaceRoot: string) {
   };
   const service = new AppInstallService(
     { getRoot: jest.fn().mockReturnValue(workspaceRoot) } as any,
+    { extract: jest.fn() } as any,
     validator as any,
     registry as any,
     schema as any,
@@ -249,6 +250,7 @@ function createDependencies(workspaceRoot: string) {
     pools as any,
     activation as any,
     { replaceForApp: jest.fn(), removeForApp: jest.fn().mockResolvedValue(undefined) } as any,
+    { extractAndStoreSecrets: jest.fn((_appId: string, config: any) => Promise.resolve(config)), deleteAllSecrets: jest.fn().mockResolvedValue(undefined) } as any,
   );
 
   return { service, registry, schema, migrations, pools, activation };

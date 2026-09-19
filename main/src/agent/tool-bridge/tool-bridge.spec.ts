@@ -1,6 +1,10 @@
 import { ToolBridgeService } from './tool-bridge.service';
 import { DynamicToolProviderRegistry } from './dynamic-tool-provider.registry';
 import { ToolProvider, ToolContext } from './tool-provider.interface';
+import {
+  createInvocationPrincipal,
+  createUserPrincipal,
+} from '../../platform/app-store/runtime/invocation-principal';
 
 const mockProvider: ToolProvider = {
   toolIds: ['mock_a', 'mock_b'],
@@ -209,6 +213,40 @@ describe('ToolBridgeService', () => {
       expect(tools2).toHaveLength(1);
       expect(createTools).toHaveBeenCalledTimes(2);
     });
+
+    test('MCP registry changes invalidate cached connector tools', async () => {
+      const createTools = jest.fn().mockResolvedValue([
+        { name: 'mcp_erp_query', description: 'ERP', parameters: {}, execute: async () => ({ content: [] }) },
+      ]);
+      const provider: ToolProvider = {
+        toolIds: ['mcp'],
+        getCatalog: () => [],
+        createTools,
+      };
+      let notify: (() => void) | undefined;
+      const mcpRegistry = {
+        onChange: jest.fn((listener: () => void) => {
+          notify = listener;
+          return jest.fn();
+        }),
+      };
+      const bridge = new ToolBridgeService(
+        [provider],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        mcpRegistry as any,
+      );
+      await bridge.init({});
+
+      await bridge.buildForAgent(['mcp'], { userId: 'u1' });
+      await bridge.buildForAgent(['mcp'], { userId: 'u1' });
+      notify!();
+      await bridge.buildForAgent(['mcp'], { userId: 'u1' });
+
+      expect(createTools).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('dynamic registry', () => {
@@ -287,7 +325,7 @@ describe('ToolBridgeService', () => {
       const registry = new DynamicToolProviderRegistry();
       registry.register('app_1', [dynamicProvider]);
       const userService = { getUser: async () => ({ role: { permissions: ['sys:admin'] } }) } as any;
-      const appGrantService = { hasAppAccess: async () => false } as any;
+      const appGrantService = { hasAppAccessForPrincipal: async () => false, getRequiredToolPermission: async () => undefined } as any;
       const bridge = new ToolBridgeService([], registry, appGrantService, userService);
       await bridge.init({});
 
@@ -305,7 +343,7 @@ describe('ToolBridgeService', () => {
       const registry = new DynamicToolProviderRegistry();
       registry.register('app_1', [dynamicProvider]);
       const userService = { getUser: async () => ({ role: { permissions: ['app:use'] } }) } as any;
-      const appGrantService = { hasAppAccess: async () => true } as any;
+      const appGrantService = { hasAppAccessForPrincipal: async () => true, getRequiredToolPermission: async () => undefined } as any;
       const bridge = new ToolBridgeService([], registry, appGrantService, userService);
       await bridge.init({});
 
@@ -313,5 +351,118 @@ describe('ToolBridgeService', () => {
       const result = await tools[0].execute('id', {});
       expect(result.content[0].text).toBe('ok');
     });
+
+    test('app-owned tool is denied when invocation identity is missing', async () => {
+      const dynamicProvider: ToolProvider = {
+        toolIds: ['app_tool'],
+        getCatalog: () => [],
+        createTools: async () => [{
+          name: 'app_tool',
+          description: '',
+          parameters: {},
+          execute: async () => ({ content: [{ type: 'text', text: 'should not run' }] }),
+        }],
+      };
+      const registry = new DynamicToolProviderRegistry();
+      registry.register('app_1', [dynamicProvider]);
+      const bridge = new ToolBridgeService([], registry);
+      await bridge.init({});
+
+      const tools = await bridge.buildForAgent(['app_tool'], {});
+      const result = await tools[0].execute('id', {});
+
+      expect(result.details.__error.code).toBe('FORBIDDEN');
+      expect(result.content[0].text).toContain('Forbidden');
+    });
+
+    test('delegated administrator permissions do not bypass APP grants', async () => {
+      const execute = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'should not run' }] });
+      const dynamicProvider: ToolProvider = {
+        toolIds: ['app_tool'],
+        getCatalog: () => [],
+        createTools: async () => [{ name: 'app_tool', description: '', parameters: {}, execute }],
+      };
+      const registry = new DynamicToolProviderRegistry();
+      registry.register('app_1', [dynamicProvider]);
+      const appGrantService = { hasAppAccessForPrincipal: jest.fn().mockResolvedValue(false), getRequiredToolPermission: jest.fn().mockResolvedValue(undefined) };
+      const bridge = new ToolBridgeService([], registry, appGrantService as any);
+      await bridge.init({});
+      const delegated = createInvocationPrincipal({
+        type: 'delegated',
+        principalId: 'delegation:d1',
+        userId: 'admin-user',
+        permissions: ['sys:admin'],
+        scopes: ['connection:invoke'],
+        origin: 'test',
+        issuedAt: Date.now(),
+      });
+
+      const [tool] = await bridge.buildForAgent(['app_tool'], { principal: delegated });
+      const result = await tool.execute('id', {});
+
+      expect(result.details.__error.code).toBe('FORBIDDEN');
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    test('provides app tools with a principal-bound connection client', async () => {
+      const principal = createUserPrincipal({ id: 'u1' }, 'test');
+      const client = {
+        listBindings: jest.fn(),
+        describe: jest.fn(),
+        invoke: jest.fn().mockResolvedValue({ marker: 'erp-primary' }),
+      };
+      const connectionBindings = {
+        createClient: jest.fn().mockReturnValue(client),
+      };
+      const dynamicProvider: ToolProvider = {
+        toolIds: ['app_tool'],
+        getCatalog: () => [],
+        createTools: async ctx => [{
+          name: 'app_tool',
+          description: '',
+          parameters: {},
+          execute: async () => ({
+            content: [{ type: 'text', text: JSON.stringify(await ctx.connections!.invoke('binding-1', {})) }],
+          }),
+        }],
+      };
+      const registry = new DynamicToolProviderRegistry();
+      registry.register('app_1', [dynamicProvider]);
+      const appGrantService = { hasAppAccessForPrincipal: jest.fn().mockResolvedValue(true), getRequiredToolPermission: jest.fn().mockResolvedValue(undefined) };
+      const bridge = new ToolBridgeService(
+        [],
+        registry,
+        appGrantService as any,
+        undefined,
+        connectionBindings as any,
+      );
+      await bridge.init({});
+
+      const [tool] = await bridge.buildForAgent(['app_tool'], { principal });
+      const result = await tool.execute('id', {});
+
+      expect(connectionBindings.createClient).toHaveBeenCalledWith('app_1', principal);
+      expect(client.invoke).toHaveBeenCalledWith('binding-1', {});
+      expect(result.content[0].text).toContain('erp-primary');
+    });
+  });
+
+  test('direct invocation never falls back to another tool from the provider', async () => {
+    const provider: ToolProvider = {
+      toolIds: ['requested'],
+      getCatalog: () => [],
+      createTools: async () => [{
+        name: 'different',
+        description: '',
+        parameters: {},
+        execute: jest.fn(),
+      }],
+    };
+    const bridge = new ToolBridgeService([provider]);
+    await bridge.init({});
+
+    await expect(bridge.callTool('requested', {})).rejects.toThrow(
+      'Tool requested must resolve to exactly one instance; received 0',
+    );
   });
 });

@@ -3,7 +3,6 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import extractZip from 'extract-zip';
 import { WorkspaceService } from '../../../workspace/workspace.service';
 import { AppManifest, AppManifestSchema } from '../validators/manifest.schema';
 import { AppValidatorService } from '../validators/app-validator.service';
@@ -13,6 +12,8 @@ import { AppMigrationService } from './app-migration.service';
 import { AppPoolService } from './app-pool.service';
 import { AppActivationService } from './app-activation.service';
 import { AppCapabilityService } from './app-capability.service';
+import { AppCredentialService } from './app-credential.service';
+import { SafeArchiveService } from './safe-archive.service';
 import { emitAppUpdated } from '../runtime/app-events';
 
 export type AppInstallProgressReporter = (
@@ -42,6 +43,7 @@ export class AppInstallService {
 
   constructor(
     private readonly workspace: WorkspaceService,
+    private readonly archives: SafeArchiveService,
     private readonly validator: AppValidatorService,
     private readonly registry: AppRegistryService,
     private readonly schema: AppSchemaService,
@@ -49,6 +51,7 @@ export class AppInstallService {
     private readonly pools: AppPoolService,
     private readonly activation: AppActivationService,
     private readonly capabilities: AppCapabilityService,
+    private readonly credentials: AppCredentialService,
   ) {}
 
   async validatePackage(packagePath: string) {
@@ -137,7 +140,9 @@ export class AppInstallService {
       }
     }
 
-    const installDir = path.join(this.workspace.getRoot(), 'app-store', manifest.shortName);
+    // 版本目录协议：app-store/<shortName>/versions/<version>，registry extract_dir 即 active 指针
+    const appRootDir = path.join(this.workspace.getRoot(), 'app-store', manifest.shortName);
+    const installDir = path.join(appRootDir, 'versions', manifest.version);
     const resources: FailedInstallResources = {
       installDirCreated: false,
       registryCreated: false,
@@ -151,10 +156,16 @@ export class AppInstallService {
       if (fs.existsSync(installDir)) {
         throw new BadRequestException(`Install directory already exists for app ${manifest.appId}`);
       }
+      // 全新安装不允许残留应用根目录（旧版本目录属于其他版本升级场景，不在安装路径出现）
+      if (!restoring && fs.existsSync(appRootDir) && fs.readdirSync(appRootDir).length > 0) {
+        throw new BadRequestException(`Install directory already exists for app ${manifest.appId}`);
+      }
       fs.mkdirSync(installDir, { recursive: true });
       resources.installDirCreated = true;
       fs.cpSync(extractDir, installDir, { recursive: true });
 
+      // secret 字段：密文入 credential store，registry 只保留 secret:// 引用（先 extract 再落库，避免明文写入）
+      config = await this.credentials.extractAndStoreSecrets(manifest.appId, config, manifest);
       if (restoring) {
         await this.registry.restore(manifest, config, installDir);
         resources.registryRestored = true;
@@ -194,7 +205,22 @@ export class AppInstallService {
       this.logger.log(`App ${manifest.appId} installed successfully`);
     } catch (err) {
       await this.cleanupFailedInstall(manifest, installDir, resources);
+      // 清理版本目录的父目录（versions/ 与 <shortName>/），保持安装失败无残留
+      this.pruneEmptyParents(installDir);
       throw err;
+    }
+  }
+
+  /** 删除 installDir 之上为空的 versions/ 与 <shortName>/ 目录（仅空目录才删，天然幂等） */
+  private pruneEmptyParents(installDir: string): void {
+    let dir = path.dirname(installDir);
+    for (let i = 0; i < 2; i++) {
+      try {
+        fs.rmdirSync(dir); // 仅当目录为空时成功
+      } catch {
+        break;
+      }
+      dir = path.dirname(dir);
     }
   }
 
@@ -229,6 +255,9 @@ export class AppInstallService {
     installDir: string,
     resources: FailedInstallResources,
   ): Promise<void> {
+    await this.cleanupStep(`removing secrets for app ${manifest.appId}`, () =>
+      this.credentials.deleteAllSecrets(manifest.appId),
+    );
     if (resources.registryCreated) {
       await this.cleanupStep(`marking app ${manifest.appId} as failed`, () =>
         this.registry.updateStatus(manifest.appId, 'failed'),
@@ -279,7 +308,7 @@ export class AppInstallService {
   }
 
   private async deactivatePartialApp(manifest: AppManifest): Promise<void> {
-    this.activation.deactivateApp(manifest.appId);
+    await this.activation.deactivateApp(manifest.appId, 'uninstall');
     await this.activation.removePanels(manifest.appId);
     this.activation.removeAgents(manifest);
     this.activation.removeSkills(manifest);
@@ -292,8 +321,7 @@ export class AppInstallService {
       os.tmpdir(),
       `jzapp_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
     );
-    fs.mkdirSync(tempDir, { recursive: true });
-    await extractZip(packagePath, { dir: tempDir });
+    await this.archives.extract(packagePath, tempDir);
     return tempDir;
   }
 }

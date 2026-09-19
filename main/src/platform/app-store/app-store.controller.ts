@@ -1,9 +1,10 @@
 import {
   Controller, Get, Post, Delete, Param, Body, Query,
-  UseGuards, HttpCode, HttpStatus, UploadedFile,
+  UseGuards, HttpCode, HttpStatus, HttpException, UploadedFile,
   UseInterceptors, Res, Req, BadRequestException, NotFoundException,
   ForbiddenException, Logger, Sse, MessageEvent,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import { Observable } from 'rxjs';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
@@ -14,7 +15,7 @@ import * as crypto from 'crypto';
 import { spawn } from 'child_process';
 import { AppRegistryService } from './services/app-registry.service';
 import { AppInstallService, ORPHANED_DATABASE_RESOURCES_ERROR } from './services/app-install.service';
-import { APP_CONFIG_ARTIFACT_PERMISSION } from './services/app-activation.service';
+import { APP_CONFIG_ARTIFACT_PERMISSION, AppActivationService } from './services/app-activation.service';
 import { AppUninstallService } from './services/app-uninstall.service';
 import { AppUpgradeService } from './services/app-upgrade.service';
 import { AppGrantService } from './services/app-grant.service';
@@ -25,8 +26,12 @@ import { AppInstanceService } from './services/app-instance.service';
 import { AppAssetService } from './services/app-asset.service';
 import { AppCredentialService } from './services/app-credential.service';
 import { DynamicModuleLoader } from './runtime/dynamic-module.loader';
+import { CompanionServiceManager } from './runtime/companion-service.manager';
 import { AppLogService, AppLogEntry } from './services/app-log.service';
+import { AppConnectionBindingService } from './services/app-connection-binding.service';
+import { InvocationContextFactory } from './runtime/invocation-context.factory';
 import { parseManifestCapabilities } from './services/app-capability.service';
+import { ToolBridgeService } from '../../agent/tool-bridge/tool-bridge.service';
 import { Public } from '../auth/public.decorator';
 import { memStorage } from './dto/mem-storage';
 
@@ -46,8 +51,13 @@ export class AppStoreController {
     private readonly instances: AppInstanceService,
     private readonly assets: AppAssetService,
     private readonly credentials: AppCredentialService,
+    private readonly activation: AppActivationService,
     private readonly loader: DynamicModuleLoader,
     private readonly appLogs: AppLogService,
+    private readonly invocationContexts: InvocationContextFactory,
+    private readonly connectionBindings: AppConnectionBindingService,
+    private readonly companions: CompanionServiceManager,
+    private readonly moduleRef: ModuleRef,
   ) {}
 
   // ------------------------------------------------------------------
@@ -56,7 +66,11 @@ export class AppStoreController {
 
   @Get('apps')
   async listApps() {
-    return this.registry.findAll();
+    const apps = await this.registry.findAll();
+    return apps.map(app => ({
+      ...app,
+      config: this.credentials.maskConfig(app.config ?? {}, app.manifest),
+    }));
   }
 
   @Get('apps/:appId')
@@ -65,6 +79,8 @@ export class AppStoreController {
     if (!app) throw new NotFoundException(`App ${appId} not found`);
     return {
       ...app,
+      // secret 字段只回报是否已配置
+      config: this.credentials.maskConfig(app.config ?? {}, app.manifest),
       // manifest 中的署名与描述提升为顶层字段，供详情页直接展示
       author: app.manifest?.author ?? null,
       description: app.manifest?.description?.zh ?? app.manifest?.description?.en ?? null,
@@ -122,13 +138,15 @@ export class AppStoreController {
   @Post('stage')
   @HttpCode(HttpStatus.ACCEPTED)
   @UseInterceptors(FileInterceptor('package', { storage: memStorage() }))
-  async stagePackage(@UploadedFile() file: Express.Multer.File) {
+  async stagePackage(@UploadedFile() file: Express.Multer.File, @Req() req: any) {
+    this.requireAdmin(req);
     if (!file) throw new BadRequestException('No package file uploaded');
     return this.staging.start(this.writeTempFile(file));
   }
 
   @Get('stage/:stageId')
-  getStageStatus(@Param('stageId') stageId: string) {
+  getStageStatus(@Param('stageId') stageId: string, @Req() req: any) {
+    this.requireAdmin(req);
     return this.operations.get(stageId);
   }
 
@@ -142,7 +160,8 @@ export class AppStoreController {
     stageId?: string;
     config?: Record<string, unknown>;
     purgeOrphanedData?: boolean;
-  }) {
+  }, @Req() req: any) {
+    this.requireAdmin(req);
     if (!body?.stageId) throw new BadRequestException('stageId is required');
     const config = body.config && typeof body.config === 'object' && !Array.isArray(body.config)
       ? body.config
@@ -229,7 +248,9 @@ export class AppStoreController {
   async upgradeApp(
     @Param('appId') appId: string,
     @UploadedFile() file: Express.Multer.File,
+    @Req() req: any,
   ) {
+    this.requireAdmin(req);
     if (!file) throw new BadRequestException('No package file uploaded');
     const tmp = this.writeTempFile(file);
     try {
@@ -248,8 +269,10 @@ export class AppStoreController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async uninstallApp(
     @Param('appId') appId: string,
-    @Query('purgeData') purgeData?: string,
+    @Query('purgeData') purgeData: string | undefined,
+    @Req() req: any,
   ) {
+    this.requireAdmin(req);
     await this.uninstall.uninstall(appId, { purgeData: purgeData === 'true' });
   }
 
@@ -258,19 +281,35 @@ export class AppStoreController {
   // ------------------------------------------------------------------
 
   @Get('apps/:appId/grants')
-  async getGrants(@Param('appId') appId: string) {
+  async getGrants(@Param('appId') appId: string, @Req() req: any) {
+    this.requireAdmin(req);
     return this.grants.getGrants(appId);
   }
 
   @Post('apps/:appId/grants')
-  async setGrant(@Param('appId') appId: string, @Body() body: any) {
-    await this.grants.setGrant({ appId, ...body });
+  async setGrant(@Param('appId') appId: string, @Body() body: any, @Req() req: any) {
+    this.requireAdmin(req);
+    await this.grants.setGrant({ ...body, appId });
     return { ok: true };
   }
 
   // ------------------------------------------------------------------
   // Invoke — 扩展包后端统一调用入口（T2.6）
   // ------------------------------------------------------------------
+
+  /** GET /api/app-store/apps/:appId/services — 伴随服务运行状态（PLAT-016，运维可见性） */
+  @Get('apps/:appId/services')
+  async listCompanionServices(@Param('appId') appId: string) {
+    const app = await this.registry.findOne(appId);
+    if (!app) throw new NotFoundException(`App ${appId} not found`);
+    const degraded = this.companions.isDegraded(appId);
+    return {
+      appId,
+      degraded: degraded.degraded,
+      reason: degraded.reason,
+      services: this.companions.listServices(appId),
+    };
+  }
 
   /**
    * POST /api/app-store/apps/:appId/invoke/:handler
@@ -294,22 +333,37 @@ export class AppStoreController {
     const app = await this.registry.findOne(appId);
     if (!app) throw new NotFoundException(`App ${appId} not found`);
 
+    // 停用排空中拒绝新调用
+    if (this.activation.isDraining(appId)) {
+      throw new HttpException(`App ${appId} is deactivating`, HttpStatus.CONFLICT);
+    }
+    // PLAT-016：伴随服务运行期不健康 → degraded，拒绝新调用（避免产生脏结果）
+    const degraded = this.companions.isDegraded(appId);
+    if (degraded.degraded) {
+      throw new HttpException(`App ${appId} degraded: ${degraded.reason}`, HttpStatus.SERVICE_UNAVAILABLE);
+    }
     // 白名单校验
     const declared = (app.manifest?.backend?.controllers ?? []).flatMap(c => c.handlers ?? []);
     if (!declared.includes(handler)) {
       throw new NotFoundException(`Handler ${handler} not declared in manifest`);
     }
 
-    // 授权：管理员放行，否则必须持有该应用的任意有效授权
-    const userId: string | undefined = req.user?.id;
-    const isAdmin = req.user?.role?.permissions?.includes('sys:admin') === true;
+    const principal = this.invocationContexts.fromRequest(req, `app-controller:${appId}`);
+    const isAdmin = principal?.permissions.includes('sys:admin') === true;
     if (!isAdmin) {
-      if (!userId || !(await this.grants.hasAppAccess(appId, userId))) {
-        throw new ForbiddenException(`No grant for app ${appId}`);
+      if (!principal) throw new ForbiddenException(`No grant for app ${appId}`);
+      // handler 声明了 required permission 时按细粒度判定，否则回退 app 粒度（兼容旧 manifest）
+      const requiredPermission = await this.grants.getRequiredHandlerPermission(appId, handler);
+      const allowed = requiredPermission
+        ? await this.grants.hasPermissionForPrincipal(appId, requiredPermission, principal)
+        : await this.grants.hasAppAccessForPrincipal(appId, principal);
+      if (!allowed) {
+        throw new ForbiddenException(requiredPermission
+          ? `Missing permission ${requiredPermission} for app ${appId}`
+          : `No grant for app ${appId}`);
       }
     }
 
-    // 解析控制器实例并调用
     const moduleRef = this.loader.getModuleRef(appId) as any;
     const [className, methodName] = handler.split('.');
     const instance = moduleRef?.controllers?.[className];
@@ -317,7 +371,28 @@ export class AppStoreController {
       throw new NotFoundException(`Controller ${className}.${methodName} not available for app ${appId}`);
     }
 
-    return instance[methodName](body ?? {}, { userId });
+    const allowedPlatformTools = new Set(app.manifest?.usesPlatformTools ?? []);
+    const tools = Object.freeze({
+      call: async (name: string, params: unknown) => {
+        if (!allowedPlatformTools.has(name)) {
+          throw new ForbiddenException(`Platform tool ${name} is not declared for app ${appId}`);
+        }
+        const toolBridge = this.moduleRef.get(ToolBridgeService, { strict: false });
+        if (!toolBridge) throw new NotFoundException('Platform tool service is unavailable');
+        return toolBridge.callTool(name, params, principal);
+      },
+    });
+    const invocation = Object.freeze({
+      appId,
+      requestId: crypto.randomUUID(),
+      principal,
+      userId: principal?.userId,
+      roleIds: principal?.roleIds ?? [],
+      permissions: principal?.permissions ?? [],
+      tools,
+      connections: this.connectionBindings.createClient(appId, principal),
+    });
+    return instance[methodName](body ?? {}, invocation);
   }
 
   // ------------------------------------------------------------------
@@ -327,8 +402,10 @@ export class AppStoreController {
   @Get('apps/:appId/audit')
   async getAuditLog(
     @Param('appId') appId: string,
-    @Query('limit') limit?: string,
+    @Query('limit') limit: string | undefined,
+    @Req() req: any,
   ) {
+    this.requireAdmin(req);
     return this.audit.getLogs(appId, limit ? parseInt(limit) : 100);
   }
 
@@ -337,7 +414,8 @@ export class AppStoreController {
   // ------------------------------------------------------------------
 
   @Get('instances')
-  async getInstances() {
+  async getInstances(@Req() req: any) {
+    this.requireAdmin(req);
     return this.instances.getAll();
   }
 
@@ -346,8 +424,19 @@ export class AppStoreController {
   // ------------------------------------------------------------------
 
   @Post('apps/:appId/config')
-  async updateConfig(@Param('appId') appId: string, @Body() body: any) {
-    await this.registry.updateConfig(appId, body);
+  async updateConfig(@Param('appId') appId: string, @Body() body: any, @Req() req: any) {
+    this.requireAdmin(req);
+    const app = await this.registry.findOne(appId);
+    if (!app) throw new NotFoundException(`App ${appId} not found`);
+    // secret 字段密文入 credential store，registry 只保留 secret:// 引用
+    const config = await this.credentials.extractAndStoreSecrets(appId, body ?? {}, app.manifest);
+    await this.registry.updateConfig(appId, config);
+    await this.audit.log(appId, 'config_update', req.user?.id ?? null, { keys: Object.keys(config) });
+    // secret/配置更新后重载 backend，使解析后的新值生效
+    if (app.status === 'active' && app.installDir) {
+      this.activation.deactivateApp(appId);
+      await this.activation.activateApp(appId, app.installDir, app.manifest);
+    }
     return { ok: true };
   }
 
@@ -368,9 +457,9 @@ export class AppStoreController {
   ): Promise<Observable<MessageEvent>> {
     const app = await this.registry.findOne(appId);
     if (!app) throw new NotFoundException(`App ${appId} not found`);
-    const userId: string | undefined = req.user?.id;
-    const isAdmin = req.user?.role?.permissions?.includes('sys:admin') === true;
-    if (!isAdmin && (!userId || !(await this.grants.hasAppAccess(appId, userId)))) {
+    const principal = this.invocationContexts.fromRequest(req, `app-logs:${appId}`);
+    const isAdmin = principal?.permissions.includes('sys:admin') === true;
+    if (!isAdmin && (!principal || !(await this.grants.hasAppAccessForPrincipal(appId, principal)))) {
       throw new ForbiddenException(`No grant for app ${appId}`);
     }
 
@@ -423,6 +512,12 @@ export class AppStoreController {
   // ------------------------------------------------------------------
   // Helpers
   // ------------------------------------------------------------------
+
+  private requireAdmin(req: any): void {
+    if (req.user?.role?.permissions?.includes('sys:admin') !== true) {
+      throw new ForbiddenException('需要管理员权限');
+    }
+  }
 
   private writeTempFile(file: Express.Multer.File): string {
     const tmp = path.join(os.tmpdir(), `jzapp_upload_${crypto.randomBytes(4).toString('hex')}.jzapp`);

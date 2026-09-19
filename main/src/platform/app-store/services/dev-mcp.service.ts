@@ -9,15 +9,26 @@ import { AppRegistryService } from './app-registry.service';
 import { AppAuditService } from './app-audit.service';
 import { CredentialService } from '../../../capability/skill/credential.service';
 import { ToolBridgeService } from '../../../agent/tool-bridge/tool-bridge.service';
+import { createDevMcpPrincipal } from '../runtime/invocation-principal';
+
+export type DevTokenScope = 'read' | 'invoke' | 'manage';
 
 interface StoredDevToken {
-  token: string;
+  tokenId: string;
+  tokenHash: string; // sha256(token)，不可逆；原始 token 不落库
   issuedBy: string;
+  scopes: DevTokenScope[];
   issuedAt: string;
+  expiresAt?: string;
+}
+
+export interface VerifiedDevToken {
+  tokenId: string;
+  scopes: DevTokenScope[];
 }
 
 const DEV_TOKEN_SCOPE = 'dev-mcp';
-const DEV_TOKEN_KEY = 'token';
+const DEFAULT_DEV_TOKEN_SCOPES: DevTokenScope[] = ['read', 'invoke', 'manage'];
 
 /**
  * Dev MCP（/api/dev/mcp）的支撑服务：
@@ -47,50 +58,85 @@ export class DevMcpService {
 
   // ── dev token ──
 
-  async issueToken(issuedBy: string): Promise<string> {
+  /**
+   * 签发 dev token。token 仅本次返回；库中只保存 sha256 哈希与 tokenId/scope/签发元数据。
+   * scopes 缺省为全量（read/invoke/manage），管理员可按最小授权收窄。
+   */
+  async issueToken(issuedBy: string, scopes?: DevTokenScope[]): Promise<{ token: string; tokenId: string }> {
     const token = `jzdev_${crypto.randomBytes(24).toString('hex')}`;
-    const payload: StoredDevToken = { token, issuedBy, issuedAt: new Date().toISOString() };
+    const tokenId = `dtok_${crypto.randomBytes(4).toString('hex')}`;
+    const payload: StoredDevToken = {
+      tokenId,
+      tokenHash: this.hashToken(token),
+      issuedBy,
+      scopes: scopes?.length ? scopes : DEFAULT_DEV_TOKEN_SCOPES,
+      issuedAt: new Date().toISOString(),
+    };
     await this.db.query(
       `INSERT INTO jz_credentials (scope, key, value_enc) VALUES ($1, $2, $3)
        ON CONFLICT (scope, key) DO UPDATE SET value_enc=$3, updated_at=NOW()`,
-      [DEV_TOKEN_SCOPE, DEV_TOKEN_KEY, this.credentials.encrypt(JSON.stringify(payload))],
+      [DEV_TOKEN_SCOPE, tokenId, this.credentials.encrypt(JSON.stringify(payload))],
     );
-    await this.audit.log('dev-mcp', 'dev_token_issue', issuedBy);
-    return token;
+    await this.audit.log('dev-mcp', 'dev_token_issue', issuedBy, { tokenId, scopes: payload.scopes });
+    return { token, tokenId };
   }
 
-  async getTokenStatus(): Promise<{ issued: boolean; issuedBy?: string; issuedAt?: string }> {
-    const stored = await this.readStoredToken();
-    return stored
-      ? { issued: true, issuedBy: stored.issuedBy, issuedAt: stored.issuedAt }
-      : { issued: false };
+  async getTokenStatus(): Promise<{
+    issued: boolean;
+    tokens: Array<{ tokenId: string; issuedBy: string; scopes: DevTokenScope[]; issuedAt: string; expiresAt?: string }>;
+  }> {
+    const stored = await this.readStoredTokens();
+    return {
+      issued: stored.length > 0,
+      tokens: stored.map(({ tokenId, issuedBy, scopes, issuedAt, expiresAt }) => ({
+        tokenId, issuedBy, scopes, issuedAt, expiresAt,
+      })),
+    };
   }
 
-  async revokeToken(actorId: string): Promise<void> {
-    await this.db.query(`DELETE FROM jz_credentials WHERE scope=$1 AND key=$2`, [DEV_TOKEN_SCOPE, DEV_TOKEN_KEY]);
-    await this.audit.log('dev-mcp', 'dev_token_revoke', actorId);
-  }
-
-  async verifyToken(token: string | undefined): Promise<boolean> {
-    if (!token) return false;
-    const stored = await this.readStoredToken();
-    if (!stored) return false;
-    const a = Buffer.from(token);
-    const b = Buffer.from(stored.token);
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  }
-
-  private async readStoredToken(): Promise<StoredDevToken | null> {
-    const res = await this.db.query(
-      `SELECT value_enc FROM jz_credentials WHERE scope=$1 AND key=$2`,
-      [DEV_TOKEN_SCOPE, DEV_TOKEN_KEY],
-    );
-    if (res.rows.length === 0) return null;
-    try {
-      return JSON.parse(this.credentials.decrypt(res.rows[0].value_enc));
-    } catch {
-      return null;
+  /** 吊销单个 token；tokenId 缺省时吊销全部。 */
+  async revokeToken(actorId: string, tokenId?: string): Promise<void> {
+    if (tokenId) {
+      await this.db.query(`DELETE FROM jz_credentials WHERE scope=$1 AND key=$2`, [DEV_TOKEN_SCOPE, tokenId]);
+    } else {
+      await this.db.query(`DELETE FROM jz_credentials WHERE scope=$1`, [DEV_TOKEN_SCOPE]);
     }
+    await this.audit.log('dev-mcp', 'dev_token_revoke', actorId, tokenId ? { tokenId } : { all: true });
+  }
+
+  /** 校验 token，成功返回稳定 tokenId 与 scope；失败/过期返回 null。 */
+  async verifyToken(token: string | undefined): Promise<VerifiedDevToken | null> {
+    if (!token) return null;
+    const hash = Buffer.from(this.hashToken(token));
+    for (const stored of await this.readStoredTokens()) {
+      const b = Buffer.from(stored.tokenHash);
+      if (hash.length === b.length && crypto.timingSafeEqual(hash, b)) {
+        if (stored.expiresAt && Date.parse(stored.expiresAt) <= Date.now()) return null;
+        return { tokenId: stored.tokenId, scopes: stored.scopes };
+      }
+    }
+    return null;
+  }
+
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  private async readStoredTokens(): Promise<StoredDevToken[]> {
+    const res = await this.db.query(
+      `SELECT value_enc FROM jz_credentials WHERE scope=$1`,
+      [DEV_TOKEN_SCOPE],
+    );
+    const out: StoredDevToken[] = [];
+    for (const row of res.rows) {
+      try {
+        const parsed = JSON.parse(this.credentials.decrypt(row.value_enc));
+        if (parsed?.tokenId && parsed?.tokenHash) out.push(parsed);
+      } catch {
+        // 单条损坏不影响其余 token
+      }
+    }
+    return out;
   }
 
   // ── tools（mcpExposed 聚合）──
@@ -123,7 +169,7 @@ export class DevMcpService {
     const exposed = await this.getExposedToolIds();
     if (!exposed.has(name)) throw new Error(`Tool not exposed via dev MCP: ${name}`);
     const bridge = this.moduleRef.get(ToolBridgeService, { strict: false });
-    const result = await bridge.callTool(name, args, undefined);
+    const result = await bridge.callTool(name, args, createDevMcpPrincipal(actorId));
     await this.audit.log('dev-mcp', 'dev_mcp_call', actorId, { tool: name });
     return result;
   }
@@ -159,16 +205,19 @@ export class DevMcpService {
     const match = uri.match(/^jzdev:\/\/(docs|templates)\/(.+)$/);
     if (!match) throw new Error(`Unsupported resource uri: ${uri}`);
     const [, scope, rel] = match;
-    if (rel.includes('..')) throw new Error('Path traversal rejected');
+    if (path.isAbsolute(rel) || rel.split(/[\\/]+/).includes('..')) throw new Error('Path traversal rejected');
+    const candidates = path.extname(rel) ? [rel] : [rel, `${rel}.md`];
     for (const root of await this.resourceRoots()) {
       const base = path.resolve(root, scope);
-      const target = path.resolve(base, rel);
-      if (target.startsWith(base + path.sep) && fs.existsSync(target) && fs.statSync(target).isFile()) {
-        return {
-          uri,
-          mimeType: target.endsWith('.json') ? 'application/json' : 'text/markdown',
-          text: fs.readFileSync(target, 'utf-8'),
-        };
+      for (const candidate of candidates) {
+        const target = path.resolve(base, candidate);
+        if (target.startsWith(base + path.sep) && fs.existsSync(target) && fs.statSync(target).isFile()) {
+          return {
+            uri: `jzdev://${scope}/${candidate.split(path.sep).join('/')}`,
+            mimeType: target.endsWith('.json') ? 'application/json' : 'text/markdown',
+            text: fs.readFileSync(target, 'utf-8'),
+          };
+        }
       }
     }
     throw new Error(`Resource not found: ${uri}`);

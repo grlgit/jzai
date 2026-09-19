@@ -115,6 +115,12 @@ interface ExtPanelProps {
   sdk?: unknown;
 }
 
+/** 面板 → Agent 结构化消息（与 main/src/assets/sdk/types/panel.d.ts 的 AgentMessage 对齐） */
+export interface PanelAgentMessage {
+  text: string;
+  context?: Record<string, unknown>;
+}
+
 export interface DynamicPanelSpec {
   id: string;
   name: string;
@@ -129,11 +135,13 @@ interface DynamicPanelLoaderProps {
   panel: DynamicPanelSpec;
   initialData?: unknown;
   onMessage?: (msg: unknown) => void;
+  /** 面板经 sdk.agent.send() 发出的结构化消息，由宿主路由到绑定 Agent 的会话 */
+  onAgentMessage?: (msg: PanelAgentMessage) => void | Promise<void>;
 }
 
 const MAIN_URL = process.env.NEXT_PUBLIC_API_URL ?? '';
 
-export function DynamicPanelLoader({ panel, initialData, onMessage }: DynamicPanelLoaderProps) {
+export function DynamicPanelLoader({ panel, initialData, onMessage, onAgentMessage }: DynamicPanelLoaderProps) {
   if (panel.status === 'uninstalled') {
     return <UninstalledTombstone panelName={panel.name} />;
   }
@@ -156,10 +164,22 @@ export function DynamicPanelLoader({ panel, initialData, onMessage }: DynamicPan
     [url],
   );
 
+  // 每面板独立的 sdk 对象：共享 react 实例 + 受宿主路由约束的 agent 通道
+  const sdk = useMemo(() => ({
+    ...((typeof window !== 'undefined' ? (window as any).__JZ_SDK__ : undefined) ?? { react: React }),
+    agent: {
+      send: async (msg: PanelAgentMessage) => {
+        if (!msg || typeof msg.text !== 'string' || !msg.text.trim()) return;
+        await onAgentMessage?.({ text: msg.text, context: msg.context });
+      },
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [onAgentMessage]);
+
   return (
     <PanelErrorBoundary panelName={panel.name}>
       <Suspense fallback={<PanelSkeleton />}>
-        <Comp initialData={initialData} onMessage={onMessage} sdk={(window as any).__JZ_SDK__} />
+        <Comp initialData={initialData} onMessage={onMessage} sdk={sdk} />
       </Suspense>
     </PanelErrorBoundary>
   );

@@ -90,7 +90,11 @@ export class SkillToolProvider implements ToolProvider {
               return { content: [{ type: 'text' as const, text: cancelled ? '用户取消了此操作' : '参数确认超时，操作已取消' }], details: { __confirmCancelled: true, __userCancelled: cancelled } };
             }
           }
-          const result = await this.skillExecutor.execute(skill.name, args, ctx.userId);
+          const result = await this.skillExecutor.execute(
+            skill.name,
+            args,
+            ctx.principal ?? ctx.userId,
+          );
           // Reuse shouldSkipConfirm from line 76
           if (!result.success && skill.confirmForm?.length && !shouldSkipConfirm) {
             // 体面降级（2026-09-09 修复）：此前带确认表单的技能失败一律 __abort 硬中止，
@@ -167,7 +171,11 @@ export class SkillToolProvider implements ToolProvider {
       parameters: Type.Object({ skillName: Type.String(), testParams: Type.Optional(Type.Record(Type.String(), Type.Any())) }),
       execute: async (_id: string, args: any) => {
         try {
-          const result = await this.skillExecutor.execute(args.skillName, args.testParams || {});
+          const result = await this.skillExecutor.execute(
+            args.skillName,
+            args.testParams || {},
+            ctx.principal ?? ctx.userId,
+          );
           // 提取特殊字段
           const specialFields: any = {};
           if (result) {
