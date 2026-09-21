@@ -20,6 +20,8 @@ import CustomDashboardPanel from '@/components/dashboard/CustomDashboardPanel';
 import FloatingPanel from '@/components/FloatingPanel';
 import MyEmailPanel from '@/components/MyEmailPanel';
 import { DynamicPanelLoader } from '@/components/DynamicPanelLoader';
+import MobileShell from '@/components/mobile/MobileShell';
+import MobileAccessQr from '@/components/MobileAccessQr';
 import SessionList from '@/components/SessionList';
 import SidebarCustomizeModal from '@/components/SidebarCustomizeModal';
 import ShortcutCustomizeModal from '@/components/ShortcutCustomizeModal';
@@ -31,6 +33,8 @@ import { processPanelMessages } from '@/lib/panel-message-registry';
 import { disconnectSocket } from '@/lib/socket';
 import { useI18n, LOCALES } from '@/i18n';
 import { useMessageDisplay } from '@/hooks/useMessageDisplay';
+import { useIsMobile } from '@/hooks/useIsMobile';
+import { useMobileAccess } from '@/hooks/useMobileAccess';
 
 import { getMainUrl } from '@/lib/env';
 const MAIN_URL = getMainUrl();
@@ -66,6 +70,9 @@ export default function Home() {
   const headerAgentMenuRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
   const { t, locale, setLocale } = useI18n();
+  const { url: mobileAccessUrl, forceMobile } = useMobileAccess(token);
+  // 从移动地址登录时始终手机模式；其他地址按视口宽度自动感知
+  const isMobile = useIsMobile() || forceMobile;
   const msgDisplay = useMessageDisplay(activeAgent);
   const { panels: sidebarPanels, save: saveSidebar, reset: resetSidebar } = useSidebar(token);
   const { shortcuts, save: saveShortcuts, reset: resetShortcuts } = useShortcuts(token);
@@ -77,6 +84,7 @@ export default function Home() {
   // Process panel messages via registry — no panel-specific hardcoding here.
   // startTransition：面板重渲染（react-pdf 等）降为低优先级，不阻塞聊天文本流的渲染
   useEffect(() => {
+    if (isMobile) return; // 移动模式不渲染任何面板，跳过面板数据处理
     let cancelled = false;
     processPanelMessages(messages, sidebarPanels).then(patch => {
       if (!cancelled && patch) {
@@ -86,7 +94,7 @@ export default function Home() {
       }
     });
     return () => { cancelled = true; };
-  }, [messages, sidebarPanels]);
+  }, [messages, sidebarPanels, isMobile]);
 
   // pendingInput: set by switch_agent action / panel agent.send, consumed after agent switch completes
   const [pendingInput, setPendingInput] = useState<{ text: string; extraContext?: Record<string, any> } | null>(null);
@@ -406,13 +414,13 @@ export default function Home() {
       setActiveAgent(agentId);
       setChatStarted(true);
       const agentInfo = agentList.find(a => a.id === agentId);
-      if (agentInfo?.defaultPanel) {
+      if (agentInfo?.defaultPanel && !isMobile) {
         handleNavigate(agentInfo.defaultPanel);
       } else {
         setActiveNav('chat');
       }
     }
-  }, [agentList, handleNavigate, newSession]);
+  }, [agentList, handleNavigate, newSession, isMobile]);
 
   /**
    * Panel → Agent 结构化通道（PLAT-012）：面板 sdk.agent.send() 的宿主侧路由。
@@ -457,6 +465,8 @@ export default function Home() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { actionType, actionData } = (e as CustomEvent).detail;
+      // 移动模式：面板类动作静默忽略（navigate/form_fill/ui_hook 均无面板可承载）
+      if (isMobile && (actionType === 'navigate' || actionType === 'form_fill' || actionType === 'ui_hook')) return;
       switch (actionType) {
         case 'navigate':
           // Agent-triggered navigate: open panel but do NOT switch agent
@@ -490,7 +500,7 @@ export default function Home() {
     };
     window.addEventListener('jianzhi:agent-action', handler);
     return () => window.removeEventListener('jianzhi:agent-action', handler);
-  }, [handleNavigateOnly, handleAgentSelect]);
+  }, [handleNavigateOnly, handleAgentSelect, isMobile]);
 
   // Draggable divider between content panel and chat panel
   const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
@@ -552,6 +562,65 @@ export default function Home() {
   const isAside = contentPanel !== null && !expanded;
   const isFloating = contentPanel !== null && expanded;
 
+  // License overlays shared by desktop & mobile shells
+  const licenseOverlays = (
+    <>
+      {/* License re-register dialog */}
+      {showReRegister && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]">
+          <div className="bg-white rounded-xl shadow-2xl w-96 max-w-[92vw] p-6">
+            <div className="flex items-center gap-2 mb-3">
+              <svg className="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /></svg>
+              <h3 className="text-sm font-bold text-gray-800">授权需要重新验证</h3>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">
+              检测到运行环境变化（容器重建），需要重新验证授权才能使用 AI 服务。
+              {companyName && <><br />公司：<b>{companyName}</b></>}
+            </p>
+
+            {reRegisterState === 'success' ? (
+              <div className="text-sm text-green-600 bg-green-50 rounded-lg p-3 mb-4">验证成功，AI 服务已恢复。</div>
+            ) : reRegisterState === 'error' ? (
+              <div className="text-xs text-red-600 bg-red-50 rounded-lg p-3 mb-4">验证失败：{reRegisterError}<br />请检查网络连接或联系管理员。</div>
+            ) : null}
+
+            <div className="flex justify-end gap-2">
+              {reRegisterState === 'success' ? (
+                <button onClick={() => { setShowReRegister(false); setLicenseIssue(null); window.location.reload(); }}
+                  className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700">确定</button>
+              ) : (
+                <>
+                  <button onClick={() => setShowReRegister(false)} disabled={reRegisterState === 'loading'}
+                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 disabled:opacity-50">稍后</button>
+                  <button disabled={reRegisterState === 'loading'} onClick={async () => {
+                    setReRegisterState('loading'); setReRegisterError('');
+                    try {
+                      const resp = await fetch(`${MAIN_URL}/api/edition/re-register`, { method: 'POST' });
+                      const data = await resp.json();
+                      if (data.success) { setReRegisterState('success'); }
+                      else { setReRegisterState('error'); setReRegisterError(data.error || '未知错误'); }
+                    } catch (e: any) { setReRegisterState('error'); setReRegisterError(e.message); }
+                  }} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50">
+                    {reRegisterState === 'loading' ? '验证中...' : '重新验证'}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* License issue banner (shown after dialog dismissed) */}
+      {licenseIssue && !showReRegister && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-center gap-3">
+          <span className="text-xs text-amber-700">授权待验证，AI 服务受限</span>
+          <button onClick={() => { setShowReRegister(true); setReRegisterState('idle'); }}
+            className="text-xs font-medium text-amber-700 underline hover:text-amber-900">立即验证</button>
+        </div>
+      )}
+    </>
+  );
+
   const renderChatContent = (compact: boolean) => (
     <>
       {!chatStarted ? (
@@ -601,6 +670,30 @@ export default function Home() {
       )}
     </>
   );
+
+  // 移动模式：单列聊天外壳，不渲染任何面板类功能
+  if (isMobile) {
+    return (
+      <div className="flex flex-col h-full">
+        <MobileShell
+          user={user}
+          token={token}
+          companyName={companyName}
+          agentList={agentList}
+          myCoWorkers={myCoWorkers}
+          activeAgent={activeAgent}
+          sessionId={sessionId}
+          onAgentSelect={handleAgentSelect}
+          onLoadSession={(sid) => { loadSession(sid); setChatStarted(true); }}
+          onNewSession={() => { newSession(); setChatStarted(false); }}
+          onLogout={handleLogout}
+        >
+          {renderChatContent(true)}
+        </MobileShell>
+        {licenseOverlays}
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">
@@ -757,6 +850,9 @@ export default function Home() {
               <button onClick={() => { setExpanded(true); setShowFloating(true); }}
                 className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded px-1.5 py-0.5 mr-2 text-sm" title={t('user.floatingMode')}>⬡</button>
             )}
+            <div className="mr-2">
+              <MobileAccessQr url={mobileAccessUrl} />
+            </div>
             <div className="relative group">
               <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-semibold cursor-pointer">
                 {(user.username || user.name).charAt(0)}
@@ -847,60 +943,7 @@ export default function Home() {
         />
       )}
 
-      {/* License re-register dialog */}
-      {showReRegister && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-[100]">
-          <div className="bg-white rounded-xl shadow-2xl w-96 p-6">
-            <div className="flex items-center gap-2 mb-3">
-              <svg className="w-5 h-5 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" /></svg>
-              <h3 className="text-sm font-bold text-gray-800">授权需要重新验证</h3>
-            </div>
-            <p className="text-xs text-gray-500 mb-4">
-              检测到运行环境变化（容器重建），需要重新验证授权才能使用 AI 服务。
-              {companyName && <><br />公司：<b>{companyName}</b></>}
-            </p>
-
-            {reRegisterState === 'success' ? (
-              <div className="text-sm text-green-600 bg-green-50 rounded-lg p-3 mb-4">验证成功，AI 服务已恢复。</div>
-            ) : reRegisterState === 'error' ? (
-              <div className="text-xs text-red-600 bg-red-50 rounded-lg p-3 mb-4">验证失败：{reRegisterError}<br />请检查网络连接或联系管理员。</div>
-            ) : null}
-
-            <div className="flex justify-end gap-2">
-              {reRegisterState === 'success' ? (
-                <button onClick={() => { setShowReRegister(false); setLicenseIssue(null); window.location.reload(); }}
-                  className="px-4 py-2 text-sm font-medium text-white bg-green-600 rounded-lg hover:bg-green-700">确定</button>
-              ) : (
-                <>
-                  <button onClick={() => setShowReRegister(false)} disabled={reRegisterState === 'loading'}
-                    className="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 disabled:opacity-50">稍后</button>
-                  <button disabled={reRegisterState === 'loading'} onClick={async () => {
-                    setReRegisterState('loading'); setReRegisterError('');
-                    try {
-                      const resp = await fetch(`${MAIN_URL}/api/edition/re-register`, { method: 'POST' });
-                      const data = await resp.json();
-                      if (data.success) { setReRegisterState('success'); }
-                      else { setReRegisterState('error'); setReRegisterError(data.error || '未知错误'); }
-                    } catch (e: any) { setReRegisterState('error'); setReRegisterError(e.message); }
-                  }} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 disabled:opacity-50">
-                    {reRegisterState === 'loading' ? '验证中...' : '重新验证'}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* License issue banner (shown after dialog dismissed) */}
-      {licenseIssue && !showReRegister && (
-        <div className="fixed top-0 left-0 right-0 z-50 bg-amber-50 border-b border-amber-200 px-4 py-2 flex items-center justify-center gap-3">
-          <span className="text-xs text-amber-700">授权待验证，AI 服务受限</span>
-          <button onClick={() => { setShowReRegister(true); setReRegisterState('idle'); }}
-            className="text-xs font-medium text-amber-700 underline hover:text-amber-900">立即验证</button>
-        </div>
-      )}
-
+      {licenseOverlays}
     </div>
     </div>
   );

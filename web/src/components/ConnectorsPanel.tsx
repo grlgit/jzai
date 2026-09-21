@@ -126,7 +126,10 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
 
   const deleteMcp = async (name: string) => {
     if (!(await confirmDialog(`确认删除 MCP "${name}"？文件将移入回收站。`, { danger: true }))) return;
-    await fetch(`${MAIN_URL}/api/mcp/${name}`, { method: 'DELETE', headers: authHeaders() });
+    const resp = await fetch(`${MAIN_URL}/api/mcp/${name}`, { method: 'DELETE', headers: authHeaders() }).then(r => r.json()).catch(() => ({}));
+    if (resp?.affectedWidgets > 0) {
+      alertError(`注意：有 ${resp.affectedWidgets} 个仪表块的引用了连接 "${name}"，请到「数据仪表」面板修复或删除相关仪表（连接可从回收站恢复）。`);
+    }
     if (selected?.name === name) { setSelected(null); setManifest(''); }
     load();
   };

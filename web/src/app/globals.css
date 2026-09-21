@@ -79,3 +79,49 @@ body {
   color: hsl(var(--foreground));
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* 移动端：用动态视口高度，避免地址栏伸缩导致布局抖动 */
+@media (max-width: 768px) {
+  html, body {
+    height: 100dvh;
+  }
+}
+
+/* ══════════ 仪表盘双主题（黑/白）══════════
+   主题 = 仪表盘级属性（jz_dashboards.theme），容器挂 .jz-dash（亮）或 .jz-dash.jz-dark（暗）。
+   组件内以 bg-[var(--jz-card)] 等任意值类引用，暗色 = 深底反白、弱边框、内容流线。 */
+.jz-dash {
+  --jz-bg: #f9fafb;          /* gray-50 沿用当前白风格 */
+  --jz-card: #ffffff;
+  --jz-fg: #374151;          /* gray-700 */
+  --jz-strong: #1f2937;      /* gray-800 */
+  --jz-muted: #9ca3af;       /* gray-400 */
+  --jz-faint: #d1d5db;       /* gray-300 */
+  --jz-border: #e5e7eb;      /* gray-200 */
+  --jz-border-soft: #f3f4f6; /* gray-100 */
+  --jz-accent: #4f46e5;      /* indigo-600 */
+  --jz-accent-soft: #eef2ff; /* indigo-50 */
+  --jz-overlay: rgba(255, 255, 255, 0.85);
+}
+.jz-dash.jz-dark {
+  --jz-bg: #0b1020;          /* 深底 */
+  --jz-card: #151b2e;
+  --jz-fg: #e5e9f2;          /* 反白 */
+  --jz-strong: #f4f6fb;
+  --jz-muted: #8b94ab;
+  --jz-faint: #5b657f;
+  --jz-border: #232c47;
+  --jz-border-soft: #1b2340;
+  --jz-accent: #818cf8;      /* indigo-400 暗底下提亮 */
+  --jz-accent-soft: #1e2647;
+  --jz-overlay: rgba(21, 27, 46, 0.85);
+}
+
+/* jz-dash 容器内表单控件跟随主题（背景/文字） */
+.jz-dash input, .jz-dash textarea, .jz-dash select {
+  background-color: var(--jz-card);
+  color: var(--jz-fg);
+}
+.jz-dash input::placeholder, .jz-dash textarea::placeholder {
+  color: var(--jz-faint);
+}

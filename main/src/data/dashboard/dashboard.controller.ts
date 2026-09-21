@@ -18,10 +18,10 @@ export class DashboardController {
   @Post()
   async createDashboard(
     @Headers('authorization') auth: string,
-    @Body() body: { name?: string; description?: string },
+    @Body() body: { name?: string; description?: string; theme?: 'light' | 'dark' },
   ) {
     const user = this.requireUser(auth);
-    return this.dashboardService.createDashboard(user.id, body.name || '我的仪表盘', body.description);
+    return this.dashboardService.createDashboard(user.id, body.name || '我的仪表盘', body.description, body.theme);
   }
 
   @Get(':id')
@@ -36,7 +36,7 @@ export class DashboardController {
   async updateDashboard(
     @Headers('authorization') auth: string,
     @Param('id') id: string,
-    @Body() body: { name?: string; description?: string },
+    @Body() body: { name?: string; description?: string; theme?: 'light' | 'dark' },
   ) {
     const user = this.requireUser(auth);
     const dashboard = await this.dashboardService.updateDashboard(id, user.id, body);
@@ -108,6 +108,37 @@ export class DashboardController {
   ) {
     const user = this.requireUser(auth);
     return this.dashboardService.refreshWidgetData(wid, user.id);
+  }
+
+  // ===== Shares（仅创建者可管理） =====
+
+  @Get(':id/shares')
+  async listShares(@Headers('authorization') auth: string, @Param('id') id: string) {
+    const user = this.requireUser(auth);
+    return this.dashboardService.listShares(id, user.id);
+  }
+
+  @Post(':id/shares')
+  async addShare(
+    @Headers('authorization') auth: string,
+    @Param('id') id: string,
+    @Body() body: { userId: string },
+  ) {
+    const user = this.requireUser(auth);
+    if (!body?.userId) throw new NotFoundException('请提供 userId');
+    await this.dashboardService.addShare(id, user.id, body.userId);
+    return { success: true };
+  }
+
+  @Delete(':id/shares/:uid')
+  async removeShare(
+    @Headers('authorization') auth: string,
+    @Param('id') id: string,
+    @Param('uid') uid: string,
+  ) {
+    const user = this.requireUser(auth);
+    await this.dashboardService.removeShare(id, user.id, uid);
+    return { success: true };
   }
 
   private requireUser(auth: string) {

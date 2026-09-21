@@ -46,14 +46,14 @@ export default function MetricCard({ title, data, config, bindingRow }: MetricCa
   const resolvedFootnote = resolve(config?.footnote, row);
   const resolvedTitle = resolve(title, row);
 
-  const trendColor = trend === '↑' ? 'text-green-500' : trend === '↓' ? 'text-red-500' : 'text-gray-400';
+  const trendColor = trend === '↑' ? 'text-green-500' : trend === '↓' ? 'text-red-500' : 'text-[var(--jz-muted)]';
   const iconBg = icon ? (ICON_BG[icon] || 'bg-gray-100') : '';
 
   return (
     <div className="flex flex-col justify-between h-full px-5 py-4">
       {/* Top row: title left, icon right */}
       <div className="flex items-start justify-between">
-        <span className="text-sm text-gray-400 leading-snug">{resolvedTitle}</span>
+        <span className="text-sm text-[var(--jz-muted)] leading-snug">{resolvedTitle}</span>
         {icon && (
           <span className={`w-10 h-10 rounded-xl ${iconBg} flex items-center justify-center text-xl shrink-0 ml-2`}>
             {icon}
@@ -63,13 +63,13 @@ export default function MetricCard({ title, data, config, bindingRow }: MetricCa
 
       {/* Main value */}
       <div className="flex items-baseline gap-1.5 mt-1">
-        <span className="text-2xl font-bold text-gray-800 leading-tight">{resolvedValue || '—'}</span>
-        {resolvedUnit && <span className="text-sm text-gray-400">{resolvedUnit}</span>}
+        <span className="text-2xl font-bold text-[var(--jz-strong)] leading-tight">{resolvedValue || '—'}</span>
+        {resolvedUnit && <span className="text-sm text-[var(--jz-muted)]">{resolvedUnit}</span>}
       </div>
 
       {/* Subtitle + trend */}
       <div className="flex items-center gap-2 mt-1">
-        {resolvedSubtitle && <span className="text-xs text-gray-400">{resolvedSubtitle}</span>}
+        {resolvedSubtitle && <span className="text-xs text-[var(--jz-muted)]">{resolvedSubtitle}</span>}
         {trend && (
           <span className={`text-xs font-medium ${trendColor}`}>
             {trend} {resolvedTrendValue}
@@ -79,7 +79,7 @@ export default function MetricCard({ title, data, config, bindingRow }: MetricCa
 
       {/* Footnote */}
       {resolvedFootnote && (
-        <div className="text-[10px] text-gray-300 truncate mt-2 border-t border-gray-50 pt-1.5">{resolvedFootnote}</div>
+        <div className="text-[10px] text-[var(--jz-faint)] truncate mt-2 border-t border-[var(--jz-border-soft)] pt-1.5">{resolvedFootnote}</div>
       )}
     </div>
   );

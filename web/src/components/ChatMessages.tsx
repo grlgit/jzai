@@ -81,19 +81,22 @@ function ThinkingBlock({ head, text }: { head: string; text: string }) {
   }, [text, expanded]);
   return (
     <div className="text-[11px] text-gray-400 italic leading-5 px-1">
-      {/* 固定两行：2 × 20px(leading-5) = h-10，完整两行、无省略号 */}
-      <div className="h-10 overflow-hidden whitespace-pre-wrap">{head}</div>
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="block w-full text-left text-gray-300 hover:text-gray-500 not-italic py-0.5"
-      >
-        {expanded ? '▾ 收起' : '▸ 展开全部'}
-      </button>
+      {/* 固定两行：2 × 20px(leading-5) = h-10，完整两行、无省略号；折线箭头并入行末，不单独占行 */}
+      <div className="flex items-end gap-1">
+        <div className="h-10 flex-1 min-w-0 overflow-hidden whitespace-pre-wrap break-words">{head}</div>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="shrink-0 text-gray-300 hover:text-gray-500 not-italic leading-5 px-0.5"
+          title={expanded ? '收起' : '展开全部'}
+        >
+          {expanded ? '▴' : '▾'}
+        </button>
+      </div>
       {expanded ? (
-        <div ref={fullRef} className="h-36 overflow-y-auto whitespace-pre-wrap">{text}</div>
+        <div ref={fullRef} className="h-36 overflow-y-auto whitespace-pre-wrap break-words">{text}</div>
       ) : (
         /* 滚动跟随区同样完整两行 */
-        <div ref={tailRef} className="h-10 overflow-hidden whitespace-pre-wrap">{text}</div>
+        <div ref={tailRef} className="h-10 overflow-hidden whitespace-pre-wrap break-words">{text}</div>
       )}
     </div>
   );
@@ -167,7 +170,7 @@ export default function ChatMessages({ messages, compact, isStreaming, thinkingT
   const thinkingAbove = !!(isStreaming && thinkingText && lastMsg?.role === 'assistant');
 
   return (
-    <div ref={containerRef} className={`flex-1 overflow-y-auto flex flex-col gap-3 ${compact ? 'p-3' : 'px-[15%] py-4'}`}>
+    <div ref={containerRef} className={`flex-1 overflow-y-auto overflow-x-hidden min-w-0 flex flex-col gap-3 ${compact ? 'p-3' : 'px-[15%] py-4'}`}>
       {messages.map((msg) => (
         <Fragment key={msg.id}>
           <MessageItem
@@ -230,13 +233,13 @@ const MessageItem = memo(function MessageItem({
   msg, compact, isLast, resendContent, shouldShow, t, onResend, onButtonClick,
 }: MessageItemProps) {
   return (
-    <div className={msg.role === 'user' ? 'self-end max-w-[80%]' : 'self-stretch'}>
+    <div className={`min-w-0 ${msg.role === 'user' ? 'self-end max-w-[80%]' : 'self-stretch'}`}>
       {msg.role === 'user' ? (
-        <div className="bg-gray-100 rounded-lg px-3 py-2 text-xs leading-relaxed text-gray-900 whitespace-pre-wrap">
+        <div className="bg-gray-100 rounded-lg px-3 py-2 text-xs leading-relaxed text-gray-900 whitespace-pre-wrap break-words">
           {msg.content}
         </div>
       ) : msg.role === 'system' ? (
-        <div className="bg-blue-50 rounded-lg px-3 py-1.5 text-[11px] text-blue-600 border border-blue-100">
+        <div className="bg-blue-50 rounded-lg px-3 py-1.5 text-[11px] text-blue-600 border border-blue-100 break-words">
           {msg.content}
         </div>
       ) : (
@@ -282,7 +285,7 @@ const AssistantContent = memo(function AssistantContent({ msg, isLast, shouldSho
   }, [resendContent, onResend]);
 
   return <>
-    <div className="prose prose-xs prose-gray max-w-none text-xs leading-relaxed [&_p]:my-1 [&_pre]:bg-gray-900 [&_pre]:text-green-300 [&_pre]:rounded-lg [&_pre]:p-2.5 [&_pre]:text-[11px] [&_pre]:overflow-x-auto [&_code]:text-indigo-600 [&_code]:bg-indigo-50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[11px] [&_pre_code]:text-green-300 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_table]:text-xs [&_table]:w-full [&_table]:border-collapse [&_table]:border [&_table]:border-gray-200 [&_table]:rounded-lg [&_table]:overflow-hidden [&_th]:bg-gray-50 [&_th]:px-3 [&_th]:py-1.5 [&_th]:border [&_th]:border-gray-200 [&_th]:text-left [&_th]:font-semibold [&_td]:px-3 [&_td]:py-1.5 [&_td]:border [&_td]:border-gray-200 [&_blockquote]:border-indigo-300 [&_blockquote]:text-gray-600 [&_blockquote]:pl-3 [&_blockquote]:my-2 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_ul]:my-1 [&_ul]:pl-5 [&_ul]:list-disc [&_ol]:my-1 [&_ol]:pl-5 [&_ol]:list-decimal [&_li]:my-0.5 [&_li]:pl-0.5">
+    <div className="prose prose-xs prose-gray max-w-none min-w-0 break-words text-xs leading-relaxed [&_p]:my-1 [&_pre]:bg-gray-900 [&_pre]:text-green-300 [&_pre]:rounded-lg [&_pre]:p-2.5 [&_pre]:text-[11px] [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_code]:text-indigo-600 [&_code]:bg-indigo-50 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-[11px] [&_code]:break-all [&_pre_code]:text-green-300 [&_pre_code]:bg-transparent [&_pre_code]:p-0 [&_pre_code]:break-normal [&_img]:max-w-full [&_img]:h-auto [&_table]:text-xs [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_table]:border-collapse [&_table]:border [&_table]:border-gray-200 [&_table]:rounded-lg [&_th]:bg-gray-50 [&_th]:px-3 [&_th]:py-1.5 [&_th]:border [&_th]:border-gray-200 [&_th]:text-left [&_th]:font-semibold [&_td]:px-3 [&_td]:py-1.5 [&_td]:border [&_td]:border-gray-200 [&_blockquote]:border-indigo-300 [&_blockquote]:text-gray-600 [&_blockquote]:pl-3 [&_blockquote]:my-2 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_ul]:my-1 [&_ul]:pl-5 [&_ul]:list-disc [&_ol]:my-1 [&_ol]:pl-5 [&_ol]:list-decimal [&_li]:my-0.5 [&_li]:pl-0.5">
       <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>{textContent}</ReactMarkdown>
     </div>
     {btnLabels.length > 0 && msg.model !== undefined && (

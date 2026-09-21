@@ -29,9 +29,11 @@ interface Props {
   onNew: () => void;
   visible: boolean;
   onClose: () => void;
+  /** 移动端全屏抽屉模式 */
+  mobile?: boolean;
 }
 
-export default function SessionList({ token, agentType, currentSessionId, onSelect, onNew, visible, onClose }: Props) {
+export default function SessionList({ token, agentType, currentSessionId, onSelect, onNew, visible, onClose, mobile }: Props) {
   const { t } = useI18n();
   const [sessions, setSessions] = useState<Session[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -80,12 +82,18 @@ export default function SessionList({ token, agentType, currentSessionId, onSele
   return (
     <div
       ref={panelRef}
-      className={`absolute left-0 top-0 bottom-[50%] w-64 bg-white border-r border-gray-200 shadow-xl z-30 flex flex-col rounded-br-lg overflow-hidden transition-all duration-200 ease-out ${
-        visible ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-full pointer-events-none'
-      }`}
+      className={mobile
+        ? `fixed inset-0 bg-white z-40 flex flex-col transition-transform duration-200 ease-out ${
+            visible ? 'translate-x-0' : '-translate-x-full pointer-events-none'
+          }`
+        : `absolute left-0 top-0 bottom-[50%] w-64 bg-white border-r border-gray-200 shadow-xl z-30 flex flex-col rounded-br-lg overflow-hidden transition-all duration-200 ease-out ${
+            visible ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-full pointer-events-none'
+          }`
+      }
     >
-      <div className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-200 shrink-0">
+      <div className={`flex items-center gap-2 px-3 border-b border-gray-200 shrink-0 ${mobile ? 'py-3 pt-[calc(0.75rem+env(safe-area-inset-top))]' : 'py-2.5'}`}>
         <span className="text-sm font-medium flex-1">{t('session.title')}</span>
+        <button onClick={onNew} className="text-indigo-600 hover:text-indigo-700 text-sm mr-3">{t('user.newChat')}</button>
         <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-sm">✕</button>
       </div>
       <div className="flex-1 overflow-y-auto">
@@ -97,12 +105,13 @@ export default function SessionList({ token, agentType, currentSessionId, onSele
             <div className="flex items-center gap-1">
               <span className="text-sm text-gray-700 truncate flex-1">{s.title || '新对话'}</span>
               <button onClick={(e) => handleDelete(s.id, e)}
-                className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 text-xs">✕</button>
+                className={`text-gray-300 hover:text-red-500 text-xs ${mobile ? 'px-2 py-1' : 'opacity-0 group-hover:opacity-100'}`}>✕</button>
             </div>
             <div className="text-[10px] text-gray-400 mt-0.5">{formatTime(s.updatedAt)}</div>
           </div>
         ))}
       </div>
+      {mobile && <div className="shrink-0 pb-[env(safe-area-inset-bottom)]" />}
     </div>
   );
 }

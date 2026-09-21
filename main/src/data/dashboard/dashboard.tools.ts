@@ -33,18 +33,18 @@ export class DashboardToolProvider implements ToolProvider {
     tools.push({
       name: 'dashboard_query',
       label: '数据查询',
-      description: '查询企业数据。支持 SQL 查询（只读）和 API 调用。',
+      description: '查询企业数据。支持 SQL 查询系统内置库（只读）、查询「连接」（数据库连接，query_type=mcp）和静态数据。',
       parameters: Type.Object({
-        query_type: Type.Union([Type.Literal('sql'), Type.Literal('api'), Type.Literal('static')]),
+        query_type: Type.Union([Type.Literal('sql'), Type.Literal('mcp'), Type.Literal('static')]),
         sql: Type.Optional(Type.String({ description: 'SQL 查询语句（仅 SELECT）' })),
-        endpoint: Type.Optional(Type.String({ description: 'API/MCP 端点' })),
+        mcp_name: Type.Optional(Type.String({ description: '「连接」名称（query_type=mcp 时必填），如 db-MOM-dev' })),
         params: Type.Optional(Type.Any({ description: '查询参数' })),
         data: Type.Optional(Type.Any({ description: '静态数据' })),
       }),
       execute: async (_id: string, args: any) => {
         try {
           const result = await this.dashboardService.executeDataSource(
-            { type: args.query_type, query: args.sql, endpoint: args.endpoint, params: args.params, data: args.data },
+            { type: args.query_type, query: args.sql, mcp_name: args.mcp_name, params: args.params, data: args.data },
             ctx?.userId || '',
           );
           return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }], details: null };
@@ -58,12 +58,13 @@ export class DashboardToolProvider implements ToolProvider {
     tools.push({
       name: 'dashboard_manage',
       label: '仪表盘管理',
-      description: '创建、列出、更新、删除用户的数据仪表盘。',
+      description: '创建、列出、更新、删除用户的数据仪表盘。theme 为视觉主题：light（白风格，默认）/ dark（黑风格·大屏·反白）。',
       parameters: Type.Object({
         action: Type.Union([Type.Literal('create'), Type.Literal('list'), Type.Literal('update'), Type.Literal('delete')]),
         dashboard_id: Type.Optional(Type.String({ description: '仪表盘ID（更新/删除时必填）' })),
         name: Type.Optional(Type.String({ description: '仪表盘名称（创建/更新时可选）' })),
         description: Type.Optional(Type.String({ description: '仪表盘描述（更新时可选）' })),
+        theme: Type.Optional(Type.Union([Type.Literal('light'), Type.Literal('dark')])),
       }),
       execute: async (_id: string, args: any) => {
         const userId = ctx?.userId || '';
@@ -73,13 +74,13 @@ export class DashboardToolProvider implements ToolProvider {
             return { content: [{ type: 'text' as const, text: JSON.stringify(dashboards, null, 2) }], details: null };
           }
           if (args.action === 'create') {
-            const dashboard = await this.dashboardService.createDashboard(userId, args.name || '我的仪表盘');
-            return { content: [{ type: 'text' as const, text: `仪表盘已创建: ${dashboard.name} (ID: ${dashboard.id})` }], details: { dashboard } };
+            const dashboard = await this.dashboardService.createDashboard(userId, args.name || '我的仪表盘', undefined, args.theme);
+            return { content: [{ type: 'text' as const, text: `仪表盘已创建: ${dashboard.name} (ID: ${dashboard.id}, 主题: ${dashboard.theme === 'dark' ? '黑' : '白'})` }], details: { dashboard } };
           }
           if (args.action === 'update') {
             if (!args.dashboard_id) return { content: [{ type: 'text' as const, text: '请提供 dashboard_id' }], details: null };
             const dashboard = await this.dashboardService.updateDashboard(args.dashboard_id, userId, {
-              name: args.name, description: args.description,
+              name: args.name, description: args.description, theme: args.theme,
             });
             return { content: [{ type: 'text' as const, text: `仪表盘已更新: ${dashboard.name}` }], details: { dashboard } };
           }
@@ -99,23 +100,23 @@ export class DashboardToolProvider implements ToolProvider {
     tools.push({
       name: 'dashboard_widget',
       label: '仪表盘组件',
-      description: '在仪表盘上添加、更新或删除数据组件（仪表块）。\n数据源类型：\n- static: 直接传入数据\n- sql: 查询系统数据库\n- mcp: 查询外部数据库（需指定 mcp_name 和 query）',
+      description: '在仪表盘上添加、更新或删除数据组件（仪表块）。\n数据源类型：\n- static: 直接传入数据\n- sql: 查询系统内置数据库\n- mcp: 通过「连接」取数（数据库连接 db-* 用 query 传 SQL；其它连接用 tool+params 调任意工具）',
       parameters: Type.Object({
         action: Type.Union([Type.Literal('add'), Type.Literal('update'), Type.Literal('remove')]),
         dashboard_id: Type.String({ description: '目标仪表盘ID' }),
         widget_id: Type.Optional(Type.String({ description: '仪表块ID（更新/删除时必填）' })),
         widget_type: Type.Optional(Type.Union([
           Type.Literal('metric_card'), Type.Literal('pie'), Type.Literal('bar'),
-          Type.Literal('line'), Type.Literal('curve'), Type.Literal('radar'),
+          Type.Literal('line'), Type.Literal('curve'), Type.Literal('radar'), Type.Literal('table'),
         ])),
         title: Type.Optional(Type.String()),
         config: Type.Optional(Type.Any({ description: 'ECharts 配置' })),
         data_source: Type.Optional(Type.Object({
-          type: Type.Union([Type.Literal('sql'), Type.Literal('api'), Type.Literal('static'), Type.Literal('mcp')]),
-          query: Type.Optional(Type.String({ description: 'SQL 查询语句（sql/mcp 类型用）' })),
-          mcp_name: Type.Optional(Type.String({ description: 'MCP 连接名（mcp 类型用），如 db-MOM-dev' })),
-          endpoint: Type.Optional(Type.String()),
-          params: Type.Optional(Type.Any()),
+          type: Type.Union([Type.Literal('sql'), Type.Literal('static'), Type.Literal('mcp')]),
+          query: Type.Optional(Type.String({ description: 'SQL 查询语句（sql 类型 / mcp 数据库连接用）' })),
+          mcp_name: Type.Optional(Type.String({ description: '「连接」名称（mcp 类型必填），如 db-MOM-dev' })),
+          tool: Type.Optional(Type.String({ description: '连接的工具名（mcp 类型可选，缺省 execute_query）' })),
+          params: Type.Optional(Type.Any({ description: '工具参数（mcp 类型指定 tool 时用）' })),
           data: Type.Optional(Type.Any()),
         })),
         refresh_interval: Type.Optional(Type.Number({ description: '刷新间隔（秒），0 = 不自动刷新' })),
@@ -128,6 +129,7 @@ export class DashboardToolProvider implements ToolProvider {
               widgetType: args.widget_type, title: args.title || '', config: args.config,
               dataSource: args.data_source, refreshInterval: args.refresh_interval,
             });
+            if (!widget) throw new Error('仪表创建失败');
             // Bind this session to the widget for future editing
             if (ctx?.agentKey) {
               const sid = this.agentPool.getSessionId(ctx.agentKey);
@@ -144,6 +146,7 @@ export class DashboardToolProvider implements ToolProvider {
             const widget = await this.dashboardService.updateWidget(args.widget_id, userId, {
               title: args.title, config: args.config, dataSource: args.data_source, refreshInterval: args.refresh_interval,
             });
+            if (!widget) return { content: [{ type: 'text' as const, text: '仪表块不存在' }], details: null };
             return { content: [{ type: 'text' as const, text: `仪表块已更新: "${widget.title}"` }], details: { widget } };
           }
           if (args.action === 'remove') {

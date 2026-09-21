@@ -198,7 +198,17 @@ export class McpRegistryController {
       }
     } catch { /* table may not exist yet */ }
 
-    return { success: true, name, cleanedCoworkers };
+    // 级联警告：扫描仪表盘 widget 对该连接的引用（不删除，仅提示受影响数量）
+    let affectedWidgets = 0;
+    try {
+      const { rows } = await this.db.query(
+        `SELECT COUNT(*)::int AS count FROM jz_dashboard_widgets WHERE data_source->>'mcp_name' = $1`,
+        [name],
+      );
+      affectedWidgets = rows[0]?.count || 0;
+    } catch { /* table may not exist yet */ }
+
+    return { success: true, name, cleanedCoworkers, affectedWidgets };
   }
 
   // ===== Registration =====

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Toaster } from "sonner";
 import { AppDialogHost } from "@/components/AppDialog";
 import "./globals.css";
@@ -6,6 +6,12 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "见智·企业AI",
   description: "开门见智，工作省事",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

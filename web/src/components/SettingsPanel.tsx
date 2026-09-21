@@ -85,6 +85,11 @@ export default function SettingsPanel() {
     const perms = typeof authUser.role === 'string' ? [] : (authUser.role?.permissions ?? []);
     return perms.includes('cfg:users') || perms.includes('sys:admin');
   })();
+  const isSysAdmin = (() => {
+    if (!authUser) return false;
+    const perms = typeof authUser.role === 'string' ? [] : (authUser.role?.permissions ?? []);
+    return perms.includes('sys:admin');
+  })();
   const { shortcuts, save: saveShortcuts, reset: resetShortcuts } = useShortcuts(token);
   const { panels: sidebarPanels } = useSidebar(token);
   const [editItems, setEditItems] = useState<typeof shortcuts | null>(null);
@@ -96,6 +101,42 @@ export default function SettingsPanel() {
   const [newIcon, setNewIcon] = useState('🔗');
   const [newTarget, setNewTarget] = useState('');
   const [saveMsg, setSaveMsg] = useState('');
+  // 移动访问地址
+  const [mobileUrl, setMobileUrl] = useState('');
+  const [mobileUrlConfigured, setMobileUrlConfigured] = useState(false);
+  const [mobileUrlDraft, setMobileUrlDraft] = useState<string | null>(null);
+  const [mobileMsg, setMobileMsg] = useState('');
+
+  useEffect(() => {
+    if (!token) return;
+    fetch(`${MAIN_URL}/api/mobile-access`, { headers: { 'Authorization': `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.url) { setMobileUrl(data.url); setMobileUrlConfigured(!!data.configured); }
+      })
+      .catch(() => {});
+  }, [token]);
+
+  const saveMobileUrl = async () => {
+    if (mobileUrlDraft === null) return;
+    try {
+      const resp = await fetch(`${MAIN_URL}/api/mobile-access`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: mobileUrlDraft.trim() }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.message || '保存失败');
+      setMobileMsg('已保存');
+      setMobileUrlDraft(null);
+      const r2 = await fetch(`${MAIN_URL}/api/mobile-access`, { headers: { 'Authorization': `Bearer ${token}` } });
+      const d2 = await r2.json();
+      if (d2?.url) { setMobileUrl(d2.url); setMobileUrlConfigured(!!d2.configured); }
+    } catch (e: any) {
+      setMobileMsg(e.message);
+    }
+    setTimeout(() => setMobileMsg(''), 4000);
+  };
 
   // License / Edition
   const [licenseInfo, setLicenseInfo] = useState<any>(null);
@@ -938,6 +979,31 @@ export default function SettingsPanel() {
                 className="px-6 py-2 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50">{t('common.save')}</button>
               <button onClick={async () => { await resetShortcuts(); setEditItems(null); }}
                 className="text-xs text-gray-400 hover:text-gray-600">{t('common.reset')}</button>
+            </div>
+
+            {/* 移动访问地址 */}
+            <div className="border border-gray-200 rounded-lg p-4">
+              <h3 className="text-sm font-semibold mb-1">移动访问地址</h3>
+              <p className="text-xs text-gray-400 mb-3">手机扫码或浏览器通过该地址访问时，始终进入手机模式。留空则默认取当前服务器 IP + 部署路径。</p>
+              <div className="flex items-center gap-2">
+                <input
+                  value={mobileUrlDraft ?? (mobileUrlConfigured ? mobileUrl : '')}
+                  onChange={e => setMobileUrlDraft(e.target.value)}
+                  disabled={!isSysAdmin}
+                  placeholder={mobileUrlConfigured ? 'https://…' : (mobileUrl ? `默认：${mobileUrl}` : '自动探测中…')}
+                  className="flex-1 border border-gray-200 rounded px-2 py-1.5 text-sm font-mono disabled:bg-gray-50 disabled:text-gray-500"
+                />
+                {isSysAdmin && (
+                  <button onClick={saveMobileUrl} disabled={mobileUrlDraft === null}
+                    className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700 disabled:opacity-50">{t('common.save')}</button>
+                )}
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                {!mobileUrlConfigured && mobileUrl && (
+                  <span className="text-[11px] text-gray-400">当前未配置，生效默认值：<span className="font-mono">{mobileUrl}</span></span>
+                )}
+                {mobileMsg && <span className="text-[11px] text-indigo-600">{mobileMsg}</span>}
+              </div>
             </div>
           </div>
         );

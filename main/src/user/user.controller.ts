@@ -57,6 +57,22 @@ export class UserController {
 
   // ===== Users =====
 
+  /** 轻量用户搜索（任何登录用户可用，供"分享"场景选择目标；仅返回非敏感字段） */
+  @Get('users/search')
+  async searchUsers(@Req() req: any) {
+    const me = await this.userService.verifyTokenFull(this.extractToken(req));
+    if (!me) throw new UnauthorizedException();
+    const q = String(req.query?.q || '').trim();
+    if (q.length < 1) return [];
+    const { rows } = await this.db.query(
+      `SELECT id, name, username FROM jz_users
+       WHERE status = 'active' AND is_oem_shadow = FALSE AND (name ILIKE $1 OR username ILIKE $1 OR email ILIKE $1)
+       ORDER BY name LIMIT 10`,
+      [`%${q}%`],
+    );
+    return rows;
+  }
+
   @Get('users')
   listUsers(@Req() req: any) {
     this.requirePermission(req, 'cfg:users');

@@ -1,5 +1,6 @@
 import { createInvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 import { McpAdapterService } from './mcp-adapter.service';
+import { McpRunnerService } from './mcp-runner.service';
 
 const mockType = {
   Object: (props: any) => ({ type: 'object', properties: props }),
@@ -10,20 +11,22 @@ const mockType = {
   Optional: (t: any) => ({ ...t, optional: true }),
 };
 
+const defaultServer = {
+  name: 'test_mcp',
+  description: 'A test MCP',
+  handlerCode: 'async function execute(ctx) { return { message: "ok" }; }',
+  tools: [
+    { name: 'query', description: 'Run query', inputSchema: { properties: { sql: { type: 'string' } }, required: ['sql'] } },
+  ],
+  authFields: [],
+  enabled: true,
+};
+
+let enabledList: any[] = [];
 const mockMcpRegistry = {
   isAllowedForUser: jest.fn().mockReturnValue(true),
-  getEnabled: jest.fn().mockReturnValue([
-    {
-      name: 'test_mcp',
-      description: 'A test MCP',
-      handlerCode: 'async function execute(ctx) { return { message: "ok" }; }',
-      tools: [
-        { name: 'query', description: 'Run query', inputSchema: { properties: { sql: { type: 'string' } }, required: ['sql'] } },
-      ],
-      authFields: [],
-      enabled: true,
-    },
-  ]),
+  getEnabled: jest.fn(() => enabledList),
+  get: jest.fn((name: string) => enabledList.find((m: any) => m.name === name)),
 };
 
 const mockCredentialService = {
@@ -35,10 +38,11 @@ describe('McpAdapterService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    enabledList = [defaultServer];
     mockMcpRegistry.isAllowedForUser.mockReturnValue(true);
     service = new McpAdapterService(
       mockMcpRegistry as any,
-      mockCredentialService as any,
+      new McpRunnerService(mockMcpRegistry as any, mockCredentialService as any),
     );
   });
 
@@ -66,17 +70,13 @@ describe('McpAdapterService', () => {
   });
 
   test('createTools skips MCPs with no tools', async () => {
-    mockMcpRegistry.getEnabled.mockReturnValueOnce([
-      { name: 'empty_mcp', tools: [], handlerCode: 'code' },
-    ]);
+    enabledList = [{ name: 'empty_mcp', tools: [], handlerCode: 'code' }];
     const tools = await service.createTools({ userId: 'u1', piAi: { Type: mockType } });
     expect(tools).toHaveLength(0);
   });
 
   test('createTools skips MCPs with no handlerCode', async () => {
-    mockMcpRegistry.getEnabled.mockReturnValueOnce([
-      { name: 'no_handler', tools: [{ name: 't', description: 'd', inputSchema: {} }], handlerCode: null },
-    ]);
+    enabledList = [{ name: 'no_handler', tools: [{ name: 't', description: 'd', inputSchema: {} }], handlerCode: null }];
     const tools = await service.createTools({ userId: 'u1', piAi: { Type: mockType } });
     expect(tools).toHaveLength(0);
   });
@@ -153,13 +153,13 @@ describe('McpAdapterService', () => {
   });
 
   test('returns a structured error when a connector reports failure', async () => {
-    mockMcpRegistry.getEnabled.mockReturnValueOnce([{
+    enabledList = [{
       name: 'test_mcp',
       handlerCode: 'async function execute() { return { success: false, code: "REMOTE_DENIED", message: "denied" }; }',
       tools: [{ name: 'query', description: 'Run query', inputSchema: { properties: {} } }],
       authFields: [],
       enabled: true,
-    }]);
+    }];
     const [tool] = await service.createTools({ userId: 'u1', piAi: { Type: mockType } });
 
     const result = await tool.execute('mcp_test_mcp_query', {});
@@ -171,13 +171,13 @@ describe('McpAdapterService', () => {
   });
 
   test('returns a structured error when a connector handler throws', async () => {
-    mockMcpRegistry.getEnabled.mockReturnValueOnce([{
+    enabledList = [{
       name: 'test_mcp',
       handlerCode: 'async function execute() { throw new Error("network down"); }',
       tools: [{ name: 'query', description: 'Run query', inputSchema: { properties: {} } }],
       authFields: [],
       enabled: true,
-    }]);
+    }];
     const [tool] = await service.createTools({ userId: 'u1', piAi: { Type: mockType } });
 
     const result = await tool.execute('mcp_test_mcp_query', {});
@@ -186,5 +186,23 @@ describe('McpAdapterService', () => {
       code: 'MCP_EXECUTION_ERROR',
       message: 'network down',
     });
+  });
+
+  test('returns friendly message when credentials are missing', async () => {
+    enabledList = [{
+      name: 'test_mcp',
+      handlerCode: 'async function execute() { return { message: "ok" }; }',
+      tools: [{ name: 'query', description: 'Run query', inputSchema: { properties: {} } }],
+      authFields: [{ key: 'api_key', label: 'API Key' }],
+      enabled: true,
+    }];
+    mockCredentialService.resolveCredentials.mockReturnValue({});
+    const [tool] = await service.createTools({ userId: 'u1', piAi: { Type: mockType } });
+
+    const result = await tool.execute('mcp_test_mcp_query', {});
+
+    expect(result.details).toBeNull();
+    expect(result.content[0].text).toContain('[凭证缺失]');
+    expect(result.content[0].text).toContain('API Key');
   });
 });

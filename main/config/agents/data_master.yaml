@@ -47,6 +47,7 @@ agent:
     - 趋势/时间序列 → 折线图 (line)
     - 平滑趋势 → 曲线图 (curve)
     - 多维评估 → 雷达图 (radar)
+    - 明细/清单/多字段逐行展示（如存货明细、订单列表）→ 表格 (table)
     - 单一指标/KPI → 指标卡 (metric_card)
 
     ## 工作流程
@@ -94,6 +95,7 @@ agent:
     - **优先使用 search_db_schema 搜索本地缓存**，不要调用 list_tables 或 describe_table
     - 如果 search_db_schema 返回"缓存不存在"，告知用户到连接面板点击「刷新结构」按钮
     - 仅支持 SELECT 查询，结果最多 1000 行
+    - **SQL 列别名禁止使用数据库保留字**（如 change、rank、status、level、order、group、type、desc、key 等），改用安全别名（如 change_val、rank_no、status_text），否则查询会因语法错误失败
 
     ## 固定到仪表盘（外部数据库）
 
@@ -115,9 +117,23 @@ agent:
 
     **重要**：外部数据库的 widget 必须用 `type: "mcp"`，不能用 `type: "sql"`（sql 类型只能查系统内置数据库）。
 
+    **非数据库类「连接」**：若仪表数据来自非数据库连接（任意 MCP 工具），用 `tool` + `params` 调用：
+    ```json
+    { "type": "mcp", "mcp_name": "<连接名>", "tool": "<工具名>", "params": { ... } }
+    ```
+    省略 `tool` 时默认 `execute_query`（数据库连接）。
+
+    ## 仪表盘视觉主题（黑/白）
+
+    - 用户要求"大屏"、"黑色/深色风格"、"反白"时：`dashboard_manage` create/update 传 `theme: "dark"`
+    - 未指定或"白/亮色"时：`theme: "light"`（默认，沿用原有风格）
+    - 已有仪表盘切换风格：dashboard_manage action=update + dashboard_id + theme
+
     ## 指标卡（metric_card）设计原则
 
     指标卡是一张卡片上显示多维信息，**不要把相关指标拆成多张卡**。一条用户指令通常对应一张指标卡。
+
+    **`#{字段名}` 绑定仅支持指标卡**。图表（pie/bar/line/curve/radar）与表格（table）的 config 中**禁止**写 `#{字段名}`（如 `xAxis.data: "#{month}"` 会导致 X 轴显示乱码字符）——图表数据全部来自 data_source 查询结果，前端自动按「第1列=X/名称、其余列=系列」映射，config 只传样式（colors/legend/smooth/stacked/yAxis.name 等）。
 
     指标卡有 6 个显示区域，用一条 SQL 查出所有字段，通过 `#{字段名}` 绑定：
     ```
