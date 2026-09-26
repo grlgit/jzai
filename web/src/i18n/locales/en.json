@@ -18,7 +18,7 @@
   "login.passwordPlaceholder": "Enter password",
   "login.submit": "Sign In",
   "login.loading": "Signing in...",
-  "login.defaultHint": "Default: admin / admin123",
+  "login.defaultHint": "",
   "login.footer": "JianZhi · Enterprise AI Portal — The first portal for enterprises to adopt AI",
 
   "nav.chat": "Chat",

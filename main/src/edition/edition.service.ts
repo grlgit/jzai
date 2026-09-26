@@ -1,10 +1,7 @@
 import { Injectable, Logger, ForbiddenException, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DbService } from '../db/db.service';
-import { createHash } from 'crypto';
-import { hostname, platform } from 'os';
-import { execSync } from 'child_process';
-import { readFileSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { Edition, EDITION_FEATURES, FeatureGates, InstallationRecord } from './edition.types';
 import { AnalyticsService } from '../platform/analytics/analytics.service';
 import { LicensePayload, verifyLicense, isLicenseExpired, DEFAULT_COMMUNITY_FEATURES } from './license';
@@ -22,11 +19,12 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
   private licenseCheckTimer: ReturnType<typeof setInterval> | null = null;
   private _tokenInvalid = false;   // 官网拒绝 installation token 时置位（社区版对话/计费会用到）
   private _recovering = false;     // 防止并发恢复
+  private _replaced = false;       // 本实例已被同一手机号下的新实例取代 → 停止自动恢复，需人工重新注册
 
   // License-derived state (cached in memory, never persisted as plaintext)
   private licensePayload: LicensePayload | null = null;
   private licenseExpired = false;
-  private _licenseIssue: string | null = null; // 'fingerprint_mismatch' when container rebuilt
+  private _licenseIssue: string | null = null; // 'verification_failed' when local license cannot be verified
   private _cachedUpdate: any = null;
 
   // Credits balance cache (P0-2: avoid HTTP round-trip on every message)
@@ -91,21 +89,22 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
 
   // ── Installation token 失效自愈（社区版对话报 "invalid installation token" 时）──
   isTokenInvalid(): boolean { return this._tokenInvalid; }
+  isReplaced(): boolean { return this._replaced; }
   markTokenInvalid(): void { this._tokenInvalid = true; }
 
   /**
    * token 被官网拒绝时自动恢复：用本地企业信息重新注册换取新 token。
    * 成功 → 清除失效标志；失败（需短信验证/无企业信息）→ 置标志，由 UI 引导用户手动重新注册。
+   * 实例已被取代（INSTALLATION_REPLACED）时不自动恢复，避免两个实例互相顶号。
    */
   async recoverToken(): Promise<{ recovered: boolean; needsManual: boolean }> {
     if (this._recovering) return { recovered: false, needsManual: false };
+    if (this._replaced) return { recovered: false, needsManual: true };
     this._recovering = true;
     try {
-      const before = this.getInstallationToken();
       this.logger.warn('Installation token 失效 — 尝试自动重新注册恢复');
-      await this.autoRegister();   // 不抛错；成功则更新 installation_token + license
-      const after = this.getInstallationToken();
-      if (after && after !== before && this.isRegistered() && !this.licenseExpired) {
+      const ok = await this.autoRegister();   // 成功则更新 installation_token + license
+      if (ok && this.isRegistered() && !this.licenseExpired) {
         this._tokenInvalid = false;
         this.logger.log('Installation token 已通过重新注册恢复');
         return { recovered: true, needsManual: false };
@@ -122,17 +121,25 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
   private async validateTokenAtStartup(): Promise<void> {
     const token = this.getInstallationToken();
     if (!token) return;
-    let status: number;
+    let resp: Response;
     try {
-      const resp = await fetch(`${this.websiteUrl}/api/v1/credits/balance`, {
+      resp = await fetch(`${this.websiteUrl}/api/v1/credits/balance`, {
         headers: { Authorization: `Bearer ${token}` },
         signal: AbortSignal.timeout(10000),
       });
-      status = resp.status;
     } catch {
       return; // 网络不可达 → 视为未知，不动
     }
-    if (status === 401 || status === 403) {
+    if (resp.status === 401 || resp.status === 403) {
+      // 区分"实例被取代"与普通 token 失效：被取代时不自动恢复，避免两个实例互相顶号
+      let code = '';
+      try { code = (await resp.json())?.code || ''; } catch { /* ignore */ }
+      if (code === 'INSTALLATION_REPLACED') {
+        this._replaced = true;
+        this._tokenInvalid = true;
+        this.logger.warn('启动校验：本安装实例已被同一手机号下的新实例取代 — 停止自动恢复，等待人工重新注册');
+        return;
+      }
       this.logger.warn('启动校验：installation token 被官网拒绝，尝试自动恢复');
       await this.recoverToken(); // 成功清标志；失败置 _tokenInvalid，UI 引导手动重注册
     } else {
@@ -177,9 +184,10 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
       // Registration info
       registered: this.isRegistered(),
       tokenInvalid: this._tokenInvalid,   // 令牌被官网拒绝 → UI 提示重新注册
+      replaced: this._replaced,           // 实例被同手机号新实例取代 → UI 提示人工重新注册
       companyName: this.installation?.companyName || null,
       contactPhone: this.installation?.contactPhone || null,
-      machineFingerprint: this.installation?.machineFingerprint || null,
+      installationId: this.installation?.id || null,
 
       // License info
       licenseExpired: this.licenseExpired,
@@ -200,7 +208,7 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
       setupPhase: this.installation?.setupPhase || 'pending',
       needsGuidedConfig: this.installation?.needsGuidedConfig ?? true,
 
-      // License issue (fingerprint_mismatch after container rebuild, etc.)
+      // License issue (verification_failed, etc.)
       licenseIssue: this._licenseIssue,
     };
   }
@@ -222,93 +230,63 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  // ── Machine fingerprint ──
+  // ── Installation identity (no machine fingerprint since license v2) ──
 
-  generateFingerprint(): string {
-    let hwId = '';
+  /**
+   * Stable installation ID: persisted in the local DB (survives container
+   * rebuilds), shared with the website as jzw_installations.id.
+   * Honors JIANZHI_INSTALLATION_ID (injected by the installer) on first boot.
+   */
+  private async ensureLocalInstallationId(): Promise<string> {
+    if (this.installation?.id) return this.installation.id;
+    const envId = this.config.get('JIANZHI_INSTALLATION_ID', '');
     try {
-      switch (platform()) {
-        case 'darwin':
-          // macOS: IOPlatformUUID (hardware-level, stable)
-          const macOut = execSync('ioreg -d2 -c IOPlatformExpertDevice', { encoding: 'utf-8', timeout: 5000 });
-          const macMatch = macOut.match(/IOPlatformUUID.*?=.*?"([^"]+)"/);
-          if (macMatch) hwId = macMatch[1];
-          break;
-        case 'win32':
-          // Windows: MachineGuid from registry (stable, set at OS install)
-          const winOut = execSync('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', { encoding: 'utf-8', timeout: 5000 });
-          const winMatch = winOut.match(/MachineGuid\s+REG_SZ\s+(.+)/);
-          if (winMatch) hwId = winMatch[1].trim();
-          break;
-        default:
-          // Linux: /etc/machine-id (stable, generated at install time)
-          hwId = readFileSync('/etc/machine-id', 'utf-8').trim();
-          break;
+      const { rows } = await this.db.query(
+        'SELECT id, installation_token FROM jz_installation ORDER BY installation_token IS NOT NULL DESC, setup_phase DESC LIMIT 1',
+      );
+      if (rows[0]?.id) {
+        // Placeholder row created at first boot + installer-provided id → adopt installer id
+        // so the installer's registration/token stays valid for this same instance.
+        if (envId && !rows[0].installation_token && rows[0].id !== envId) {
+          await this.db.query('UPDATE jz_installation SET id = $1 WHERE id = $2', [envId, rows[0].id]);
+          return envId;
+        }
+        return rows[0].id;
       }
-    } catch { /* fallback below */ }
-
-    const raw = (hwId || hostname()) + '|' + hostname();
-    return createHash('sha256').update(raw).digest('hex');
+    } catch { /* fall through */ }
+    return envId || randomUUID();
   }
 
-  // ── Re-registration (after container rebuild / fingerprint change) ──
+  // ── Re-activation (license issue / manual re-verify from UI) ──
 
-  async reRegister(): Promise<{ success: boolean; error?: string }> {
-    if (!this._licenseIssue) return { success: true };
-
-    const instId = this.installation?.id;
-    const token = this.getInstallationToken();
-    if (!instId || !token) return { success: false, error: '无安装记录，请重新注册' };
-
-    const fingerprint = this.generateFingerprint();
-    try {
-      const resp = await fetch(`${this.websiteUrl}/api/v1/installation/re-register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ installationToken: token, newFingerprint: fingerprint }),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || `Server ${resp.status}`);
-      if (!data.license) throw new Error('Server returned no license');
-
-      const payload = verifyLicense(data.license, fingerprint);
-
-      // Mark all other records with conflicting fingerprint as stale
-      await this.db.query(
-        "UPDATE jz_installation SET machine_fingerprint = machine_fingerprint || '_stale_' || extract(epoch from now())::bigint WHERE machine_fingerprint = $1 AND id != $2",
-        [fingerprint, instId],
-      );
-
-      // Update current record by id (not token, which may be duplicated)
-      await this.db.query(
-        'UPDATE jz_installation SET machine_fingerprint = $1, license_blob = $2, edition = $3, last_sync = NOW() WHERE id = $4',
-        [fingerprint, data.license, payload.edition, instId],
-      );
-
-      this.licensePayload = payload;
-      this.licenseExpired = false;
+  /**
+   * Re-activate this installation: re-run registration with the same stable
+   * installationId. The website upserts the same instance and (取代制)
+   * supersedes any other active installation of this customer.
+   */
+  async reactivate(): Promise<{ success: boolean; error?: string }> {
+    const ok = await this.autoRegister();
+    if (ok && this.isRegistered() && !this.licenseExpired) {
       this._licenseIssue = null;
-      await this.loadInstallation();
-
-      this.logger.log(`Re-registration successful: edition=${payload.edition}`);
+      this._tokenInvalid = false;
+      this._replaced = false;
+      this.logger.log('Re-activation successful');
       return { success: true };
-    } catch (err: any) {
-      this.logger.error(`Re-registration failed: ${err.message}`);
-      return { success: false, error: err.message };
     }
+    return { success: false, error: '重新验证未生效，请检查网络连接或联系管理员' };
   }
 
   // ── Auto-registration ──
 
-  async autoRegister(smsCode?: string, overrides?: { companyName?: string; contactPerson?: string; contactPhone?: string }): Promise<void> {
-    const fingerprint = this.generateFingerprint();
+  async autoRegister(smsCode?: string, overrides?: { companyName?: string; contactPerson?: string; contactPhone?: string }): Promise<boolean> {
+    const installationId = await this.ensureLocalInstallationId();
     const companyName = overrides?.companyName || this.installation?.companyName || this.config.get('COMPANY_NAME', '未命名企业');
     const contactPerson = overrides?.contactPerson || this.installation?.contactPerson || '';
     const contactPhone = overrides?.contactPhone || this.installation?.contactPhone || this.config.get('CONTACT_PHONE', '');
 
     if (!contactPhone) {
       this.logger.warn('Auto-register skipped: no CONTACT_PHONE configured');
-      return;
+      return false;
     }
 
     try {
@@ -316,7 +294,7 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fingerprint,
+          installationId,
           edition: this.config.get('JIANZHI_EDITION', 'community'),
           companyName,
           contactPerson,
@@ -333,7 +311,7 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
 
       if (data.needsVerification) {
         this.logger.warn(`Auto-register: phone ${data.phone} needs SMS verification`);
-        return;
+        return false;
       }
 
       if (!resp.ok) {
@@ -344,23 +322,23 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
         throw new Error('Server returned no license');
       }
 
-      // Verify license before storing
-      const payload = verifyLicense(data.license, fingerprint);
+      // Verify license before storing (v2: bound to installationId + phone)
+      const payload = verifyLicense(data.license, installationId);
       // installationToken is returned separately (not embedded in license)
       const installationToken = data.installationToken;
 
-      // Save license blob and token to DB
-      const { randomUUID } = await import('crypto');
+      // Save license blob and token to DB (single-row upsert by stable id)
       await this.db.query(
-        `INSERT INTO jz_installation (id, machine_fingerprint, edition, company_name, contact_person, contact_phone, installation_token, license_blob)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (machine_fingerprint) DO UPDATE SET
-           license_blob = $8, installation_token = $7, company_name = $4, contact_person = $5, contact_phone = $6, edition = $3`,
-        [randomUUID(), fingerprint, payload.edition, companyName, contactPerson, contactPhone, installationToken, data.license],
+        `INSERT INTO jz_installation (id, edition, company_name, contact_person, contact_phone, installation_token, license_blob)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (id) DO UPDATE SET
+           license_blob = $7, installation_token = $6, company_name = $3, contact_person = $4, contact_phone = $5, edition = $2`,
+        [installationId, payload.edition, companyName, contactPerson, contactPhone, installationToken, data.license],
       );
 
       this.licensePayload = payload;
       this.licenseExpired = false;
+      this._licenseIssue = null;
       await this.loadInstallation();
 
       // Advance setup phase: pending → registered
@@ -368,8 +346,10 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
         "UPDATE jz_installation SET setup_phase = 'registered' WHERE setup_phase = 'pending'",
       );
       this.logger.log(`Auto-registered: ${companyName}, edition=${payload.edition}`);
+      return true;
     } catch (err: any) {
       this.logger.warn(`Auto-register failed (will retry on next startup): ${err.message}`);
+      return false;
     }
   }
 
@@ -526,9 +506,9 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
       throw new Error('Server returned no license');
     }
 
-    // Verify and store new license
-    const fingerprint = this.generateFingerprint();
-    const payload = verifyLicense(data.license, fingerprint);
+    // Verify and store new license (v2: bound to installationId + phone)
+    if (!this.installation?.id) throw new Error('No local installation record');
+    const payload = verifyLicense(data.license, this.installation.id);
 
     await this.db.query(
       'UPDATE jz_installation SET license_blob = $1, edition = $2, last_sync = NOW() WHERE id = $3',
@@ -580,24 +560,19 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
 
   // ── Heartbeat (stats reporting only, no license refresh) ──
 
-  private async collectTodayActiveUsers(): Promise<Array<{ userId: string; userName: string; messageCount: number }>> {
+  /** 当日活跃汇总（按实例聚合；官网按手机号维度归集，不再上报用户明细） */
+  private async collectTodayActivity(): Promise<{ userCount: number; messageCount: number }> {
     try {
       const { rows } = await this.db.query(
-        `SELECT e.user_id, u.name as user_name, u.username, COUNT(*)::int as msg_count
+        `SELECT COUNT(DISTINCT e.user_id)::int as user_count, COUNT(*)::int as msg_count
          FROM jz_events e
-         LEFT JOIN jz_users u ON u.id = e.user_id
          WHERE e.type = 'conversation_message'
            AND e.created_at >= date_trunc('day', NOW())
-           AND e.user_id IS NOT NULL
-         GROUP BY e.user_id, u.name, u.username`,
+           AND e.user_id IS NOT NULL`,
       );
-      return rows.map((r: any) => ({
-        userId: r.user_id,
-        userName: r.username || r.user_name || r.user_id,
-        messageCount: r.msg_count,
-      }));
+      return { userCount: rows[0]?.user_count || 0, messageCount: rows[0]?.msg_count || 0 };
     } catch {
-      return [];
+      return { userCount: 0, messageCount: 0 };
     }
   }
 
@@ -619,6 +594,19 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
         this.logger.debug('Heartbeat sent');
         return data;
       }
+      // token 被拒：区分"实例被取代"（停止自动恢复）与普通失效
+      if (resp.status === 401 || resp.status === 403) {
+        let code = '';
+        try { code = (await resp.json())?.code || ''; } catch { /* ignore */ }
+        if (code === 'INSTALLATION_REPLACED') {
+          this._replaced = true;
+          this._tokenInvalid = true;
+          this.logger.warn('心跳被拒：本安装实例已被同一手机号下的新实例取代 — 停止自动恢复，等待人工重新注册');
+        } else {
+          this._tokenInvalid = true;
+          this.logger.warn('心跳被拒：installation token 无效');
+        }
+      }
     } catch { /* non-critical */ }
     return null;
   }
@@ -628,7 +616,7 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
     if (!token) return;
     try {
       const dashboard = await this.analytics.getDashboard();
-      const todayActiveUsers = await this.collectTodayActiveUsers();
+      const todayActive = await this.collectTodayActivity();
       const stats = {
         totalMessages: dashboard.overview.totalMessages,
         weekMessages: dashboard.overview.weekMessages,
@@ -647,10 +635,9 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
         kbMissedQueries: dashboard.knowledge.topMissedQueries,
         topTools: dashboard.topTools,
         activeUsers: dashboard.userStats.length,
-        userStats: dashboard.userStats.slice(0, 10),
         dailyTrend: dashboard.dailyTrend,
         roi: dashboard.roi,
-        todayActiveUsers,
+        todayActive,
         collectedAt: new Date().toISOString(),
       };
       const heartbeatResult = await this.sendHeartbeat(stats);
@@ -686,7 +673,6 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
       if (rows[0]) {
         this.installation = {
           id: rows[0].id,
-          machineFingerprint: rows[0].machine_fingerprint,
           edition: rows[0].edition,
           companyName: rows[0].company_name,
           contactPerson: rows[0].contact_person,
@@ -700,11 +686,10 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
           needsGuidedConfig: rows[0].needs_guided_config ?? true,
         };
 
-        // Try to verify license from DB
+        // Try to verify license from DB (v2: bound to this installation's stable id)
         if (this.installation.licenseBlob) {
           try {
-            const fingerprint = this.generateFingerprint();
-            this.licensePayload = verifyLicense(this.installation.licenseBlob, fingerprint);
+            this.licensePayload = verifyLicense(this.installation.licenseBlob, this.installation.id);
             this.licenseExpired = isLicenseExpired(this.licensePayload);
             if (this.licenseExpired) {
               this.logger.warn('License expired — running in degraded mode, will attempt renewal on next daily check');
@@ -712,9 +697,10 @@ export class EditionService implements OnModuleInit, OnModuleDestroy {
               this.logger.log(`License verified: edition=${this.licensePayload.edition}, expiresAt=${this.licensePayload.expiresAt === 0 ? 'never' : new Date(this.licensePayload.expiresAt * 1000).toISOString()}`);
             }
           } catch (err: any) {
+            // Legacy v1 licenses land here too → startup auto-register will fetch a fresh v2 license
             this.logger.error(`License verification failed: ${err.message} — running without license`);
             this.licensePayload = null;
-            this._licenseIssue = /fingerprint|mismatch/i.test(err.message) ? 'fingerprint_mismatch' : 'verification_failed';
+            this._licenseIssue = 'verification_failed';
           }
         }
       }

@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import * as jwt from 'jsonwebtoken';
@@ -67,13 +67,13 @@ export class UserService implements OnModuleInit {
       try {
         const { rows: instRows } = await this.db.query('SELECT COUNT(*) FROM jz_installation');
         if (Number(instRows[0].count) === 0) {
-          const { createHash } = await import('crypto');
-          const { hostname } = await import('os');
-          const fp = createHash('sha256').update(`init-${hostname()}-${Date.now()}`).digest('hex');
+          // Honor installer-provided installation id so the installer's registration
+          // and this instance share the same identity on the website.
+          const instId = process.env.JIANZHI_INSTALLATION_ID || crypto.randomUUID();
           await this.db.query(
-            `INSERT INTO jz_installation (id, machine_fingerprint, edition, company_name, setup_phase)
-             VALUES ($1, $2, 'community', '未命名企业', 'pending')`,
-            [crypto.randomUUID(), fp],
+            `INSERT INTO jz_installation (id, edition, company_name, setup_phase)
+             VALUES ($1, 'community', '未命名企业', 'pending')`,
+            [instId],
           );
         }
       } catch (err: any) {
@@ -306,6 +306,10 @@ export class UserService implements OnModuleInit {
   }
 
   async updateUser(id: string, updates: { name?: string; username?: string; password?: string; roleId?: string; status?: string }): Promise<UserPublic | null> {
+    // 先确认用户存在 —— 否则 UPDATE 影响 0 行且返回 null，
+    // 调用方（如首次登录强制改密）会把"未生效"误判为"修改成功"
+    const existing = await this.getUser(id);
+    if (!existing) throw new NotFoundException('用户不存在');
     // 使用事务确保所有更新的原子性
     return this.db.transaction(async (client) => {
       if (updates.name) await client.query('UPDATE jz_users SET name=$2 WHERE id=$1', [id, updates.name]);

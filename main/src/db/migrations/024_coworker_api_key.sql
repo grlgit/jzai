@@ -14,6 +14,6 @@ CREATE INDEX IF NOT EXISTS idx_cwa_api_key ON jz_coworker_assignments(api_key);
 -- Uses assignment ID + timestamp to ensure uniqueness and avoid collisions
 -- Safe for re-run (only updates where api_key IS NULL)
 UPDATE jz_coworker_assignments
-SET api_key = 'jw_' || substr(md5(id || '-' || EXTRACT(EPOCH FROM NOW)::text || '-' || random()::text), 1, 64),
+SET api_key = 'jw_' || substr(md5(id || '-' || EXTRACT(EPOCH FROM NOW())::text || '-' || random()::text), 1, 64),
     api_key_created_at = NOW()
 WHERE api_key IS NULL;

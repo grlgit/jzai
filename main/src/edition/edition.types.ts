@@ -12,8 +12,8 @@ export interface FeatureGates {
 export const EDITION_FEATURES: Record<Edition, FeatureGates> = {
   community: {
     maxCoWorkers: 3,
-    cloudModelDirect: false,
-    modelConfigEditable: false,
+    cloudModelDirect: true,
+    modelConfigEditable: true,
     customRoles: false,
     mcpServers: false,
   },
@@ -27,8 +27,8 @@ export const EDITION_FEATURES: Record<Edition, FeatureGates> = {
 };
 
 export interface InstallationRecord {
+  /** Stable installation ID — also used as jzw_installations.id on the website */
   id: string;
-  machineFingerprint: string;
   edition: Edition;
   companyName: string;
   contactPerson: string;

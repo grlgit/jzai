@@ -19,6 +19,33 @@ import {
 /** OEM sessions are locked to the data_master agent. */
 const OEM_AGENT_ID = 'data_master';
 
+const TC_CONTENT_CAP = 8_000;
+const TC_DETAILS_CAP = 20_000;
+
+/** 落库前精简 toolCalls：截断超大文本/丢弃超大 details，但始终保留面板消息 */
+function sanitizeToolCallsForStorage(toolCalls: any[] | undefined): any[] {
+  return (toolCalls || []).map((tc) => {
+    if (!tc?.result) return { name: tc?.name, args: tc?.args };
+    const r = tc.result;
+    const result: any = {};
+    if (Array.isArray(r.content)) {
+      result.content = r.content.map((b: any) =>
+        b?.type === 'text' && typeof b.text === 'string' && b.text.length > TC_CONTENT_CAP
+          ? { ...b, text: b.text.slice(0, TC_CONTENT_CAP) + '…' }
+          : b,
+      );
+    } else if (r.content !== undefined) {
+      result.content = r.content;
+    }
+    if (r.details !== undefined && JSON.stringify(r.details).length <= TC_DETAILS_CAP) {
+      result.details = r.details;
+    }
+    if (r._panel_output) result._panel_output = r._panel_output;
+    if (r._panel_update) result._panel_update = r._panel_update;
+    return { name: tc.name, args: tc.args, result };
+  });
+}
+
 /** 进行中的一轮生成：供重进会话（chat.attach）恢复流式状态用。内存态，后端重启即丢失（退化为仅历史）。 */
 interface ActiveRun {
   key: string;              // `${userId}:${agentSessionId}`
@@ -308,7 +335,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }).catch(() => {});
 
       if (sessionId && assistantContent) {
-        await this.sessionService.saveMessage(sessionId, 'assistant', assistantContent);
+        // metadata 携带 toolCalls（截断大结果，保留面板消息 _panel_output/_panel_update）：
+        // 历史恢复时可重建面板数据（如图纸预览），同时防止长会话落库体积失控
+        await this.sessionService.saveMessage(
+          sessionId, 'assistant', assistantContent,
+          { toolCalls: sanitizeToolCallsForStorage(run.toolCalls) },
+        );
         await this.sessionService.checkAndCompress(sessionId);
       }
     } catch (error: any) {

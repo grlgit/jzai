@@ -199,7 +199,7 @@ export class ModelRouterService {
     cloudSource: 'self' | 'official';
     budgetLimit: number; overLimitAction: string;
     providers?: Record<string, ProviderConfig>;
-  }>) {
+  }  >) {
     if (update.localEndpoint !== undefined) this.localEndpoint = update.localEndpoint;
     if (update.localModel !== undefined) this.localModel = update.localModel;
     if (update.cloudProvider !== undefined) this.cloudProvider = update.cloudProvider;
@@ -391,18 +391,12 @@ export class ModelRouterService {
    * Resolve the model to use based on current config and budget.
    */
  resolveModel(): Model<any> {
-    // Community edition: always route through website proxy
-    if (this.edition?.isCommunity()) {
-      const proxy = this.edition.getLlmProxyConfig();
-      if (proxy) return this.buildOfficialProxyModel(proxy);
-      return this.buildLocalModel();
-    }
-    // Professional with "official" cloud source: also route through website proxy
+    // Official cloud source: route through website proxy (both editions)
     if (this.cloudSource === 'official') {
       const proxy = this.edition?.getLlmProxyConfig();
       if (proxy) return this.buildOfficialProxyModel(proxy);
     }
-    // Professional with "self" cloud: use own API key
+    // Self-purchased cloud: use own API key
     if (this.cloudApiKey && this.cloudModel && this.monthlySpend < this.monthlyLimit) {
       return this.buildCloudModel();
     }
@@ -419,8 +413,8 @@ export class ModelRouterService {
     // Normalize: 'default' → 'chat'
     const normalized = (!level || level === 'default') ? 'chat' : level;
 
-    // Community/official: route through website proxy with level-aware model id
-    if (this.edition?.isCommunity() || this.cloudSource === 'official') {
+    // Official cloud source: route through website proxy with level-aware model id
+    if (this.cloudSource === 'official') {
       const proxy = this.edition?.getLlmProxyConfig();
       if (proxy) {
         return this.buildOfficialProxyModel({ ...proxy, model: `jianzhi-${normalized}` });
@@ -435,24 +429,6 @@ export class ModelRouterService {
       if (this.cloudApiKey && this.cloudModel) return this.buildCloudModel();
     }
     return this.resolveModel();
-  }
-
-  /**
-   * Get vision model endpoint info for direct fetch calls (e.g. DrawingVisionService).
-   * Returns null if no cloud API key is configured.
-   */
-  getVisionEndpointInfo(): { endpoint: string; apiKey: string; modelId: string } | null {
-    if (!this.cloudApiKey) return null;
-    const modelId = this.visionModel || this.cloudModel;
-    if (!modelId) return null;
-    const cfg = this.providers.get(this.cloudProvider);
-    const baseUrl = cfg?.baseUrl || 'https://api.deepseek.com';
-    const finalBaseUrl = baseUrl.endsWith('/v1') || baseUrl.endsWith('/v4') ? baseUrl : `${baseUrl}/v1`;
-    return {
-      endpoint: `${finalBaseUrl}/chat/completions`,
-      apiKey: this.cloudApiKey,
-      modelId,
-    };
   }
 
   private buildCloudModelWithId(modelId: string): Model<any> {
@@ -475,7 +451,7 @@ export class ModelRouterService {
 
   /** Check if currently using official cloud proxy */
   isUsingOfficialCloud(): boolean {
-    return this.edition?.isCommunity() || this.cloudSource === 'official';
+    return this.cloudSource === 'official';
   }
 
   private buildLocalModel(): Model<any> {

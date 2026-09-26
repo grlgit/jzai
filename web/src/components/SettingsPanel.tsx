@@ -466,7 +466,7 @@ export default function SettingsPanel() {
           <div className="border border-gray-200 rounded-lg p-4">
             <h3 className="text-sm font-semibold mb-3">{t('settings.cloudModel')}</h3>
             <div className="space-y-3">
-              {/* Cloud Source Selector — self-purchased only available when features.cloudModelDirect */}
+              {/* Cloud Source Selector — official proxy or self-purchased key (all editions) */}
               <div>
                 <label className="block text-xs text-gray-500 mb-1">{t('settings.cloudSource')}</label>
                 <div className="flex gap-2">
@@ -475,13 +475,11 @@ export default function SettingsPanel() {
                     ☁️ {t('settings.cloudSourceOfficial')}
                     <span className="block text-[10px] text-gray-400 mt-0.5 font-normal">{t('settings.cloudSourceOfficialDesc')}</span>
                   </button>
-                  {licenseInfo?.features?.cloudModelDirect && (
-                    <button onClick={() => setCloudSource('self')}
-                      className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${cloudSource === 'self' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
-                      🔑 {t('settings.cloudSourceSelf')}
-                      <span className="block text-[10px] text-gray-400 mt-0.5 font-normal">{t('settings.cloudSourceSelfDesc')}</span>
-                    </button>
-                  )}
+                  <button onClick={() => setCloudSource('self')}
+                    className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-colors ${cloudSource === 'self' ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+                    🔑 {t('settings.cloudSourceSelf')}
+                    <span className="block text-[10px] text-gray-400 mt-0.5 font-normal">{t('settings.cloudSourceSelfDesc')}</span>
+                  </button>
                 </div>
               </div>
 
@@ -1123,9 +1121,9 @@ export default function SettingsPanel() {
                 <span>{licenseInfo.companyName || '-'}</span>
                 <span className="text-gray-500">联系电话</span>
                 <span>{licenseInfo.contactPhone || '-'}</span>
-                <span className="text-gray-500">机器指纹</span>
-                <span className="font-mono text-xs text-gray-400 truncate" title={licenseInfo.machineFingerprint}>
-                  {licenseInfo.machineFingerprint ? licenseInfo.machineFingerprint.slice(0, 16) + '...' : '-'}
+                <span className="text-gray-500">安装实例</span>
+                <span className="font-mono text-xs text-gray-400 truncate" title={licenseInfo.installationId}>
+                  {licenseInfo.installationId ? licenseInfo.installationId.slice(0, 16) + '...' : '-'}
                 </span>
                 <span className="text-gray-500">注册状态</span>
                 <span>{licenseInfo.registered

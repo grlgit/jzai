@@ -1,7 +1,14 @@
 import { createPublicKey, verify, createDecipheriv, hkdfSync } from 'crypto';
 
+/**
+ * License v2: bound to (phone, installationId) pair — no machine fingerprint.
+ * installationId is this installation's stable local ID (jz_installation.id),
+ * generated once and persisted; website uses the same value as jzw_installations.id.
+ */
 export interface LicensePayload {
-  fingerprint: string;
+  version: 2;
+  installationId: string;
+  phone: string;
   edition: 'community' | 'professional';
   features: {
     maxCoWorkers: number;
@@ -25,19 +32,24 @@ const EMBEDDED_PUBLIC_KEY = process.env.LICENSE_PUBLIC_KEY
 MCowBQYDK2VwAyEATM347xGq83SgtIIem7FbBYhvlp5ZpCvsfa5xEh4CwtI=
 -----END PUBLIC KEY-----`;
 
-const HKDF_SALT = 'jianzhi-license-v1';
+const HKDF_SALT = 'jianzhi-license-v2';
 
-function deriveKey(fingerprint: string): Buffer {
-  return Buffer.from(hkdfSync('sha256', fingerprint, HKDF_SALT, 'aes-key', 32));
+// Static AES key input material — must match website (LICENSE_STATIC_KEY).
+// Integrity is guaranteed by the Ed25519 signature; AES only obfuscates contents.
+const STATIC_KEY_IKM = process.env.LICENSE_STATIC_KEY || 'jz-license-v2-7f3a9c1e5b48d206e9f1a3c5';
+
+function deriveKey(): Buffer {
+  return Buffer.from(hkdfSync('sha256', STATIC_KEY_IKM, HKDF_SALT, 'aes-key', 32));
 }
 
 /**
  * Verify and decrypt a license string.
  * Format: base64( signature(64) + iv(12) + authTag(16) + ciphertext )
  *
- * @throws Error if signature invalid, decryption fails, or fingerprint mismatch
+ * @throws Error if signature invalid, decryption fails, license is a legacy v1
+ *         license, or installationId does not match this installation
  */
-export function verifyLicense(licenseStr: string, localFingerprint: string): LicensePayload {
+export function verifyLicense(licenseStr: string, localInstallationId: string): LicensePayload {
   const combined = Buffer.from(licenseStr, 'base64');
   if (combined.length < 64 + 12 + 16 + 1) {
     throw new Error('License too short');
@@ -58,7 +70,7 @@ export function verifyLicense(licenseStr: string, localFingerprint: string): Lic
   const authTag = blob.subarray(12, 28);
   const ciphertext = blob.subarray(28);
 
-  const aesKey = deriveKey(localFingerprint);
+  const aesKey = deriveKey();
   const decipher = createDecipheriv('aes-256-gcm', aesKey, iv);
   decipher.setAuthTag(authTag);
 
@@ -66,14 +78,19 @@ export function verifyLicense(licenseStr: string, localFingerprint: string): Lic
   try {
     plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
   } catch {
-    throw new Error('License decryption failed (machine fingerprint mismatch?)');
+    throw new Error('License decryption failed (legacy v1 license?)');
   }
 
   const payload: LicensePayload = JSON.parse(plaintext.toString('utf-8'));
 
-  // Verify fingerprint matches
-  if (payload.fingerprint !== localFingerprint) {
-    throw new Error('License fingerprint does not match this machine');
+  // v1 licenses (fingerprint-bound) are no longer accepted — trigger re-registration
+  if (payload.version !== 2) {
+    throw new Error('Legacy license format — re-registration required');
+  }
+
+  // Verify the license belongs to this installation
+  if (payload.installationId !== localInstallationId) {
+    throw new Error('License does not match this installation');
   }
 
   return payload;
@@ -88,8 +105,8 @@ export function isLicenseExpired(payload: LicensePayload): boolean {
 /** Default community features (fallback when no valid license) */
 export const DEFAULT_COMMUNITY_FEATURES: LicensePayload['features'] = {
   maxCoWorkers: 3,
-  cloudModelDirect: false,
-  modelConfigEditable: false,
+  cloudModelDirect: true,
+  modelConfigEditable: true,
   customRoles: false,
   mcpServers: false,
 };

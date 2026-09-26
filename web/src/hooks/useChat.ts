@@ -188,6 +188,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
                 content: m.content,
                 timestamp: new Date(m.createdAt),
                 model: m.role === 'assistant' ? (m.metadata?.model || 'history') : undefined,
+                toolCalls: m.metadata?.toolCalls,
               })));
             }
           }).catch(() => {}).finally(() => {
@@ -668,6 +669,8 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
         content: m.content,
         timestamp: new Date(m.createdAt),
         model: m.role === 'assistant' ? (m.metadata?.model || 'history') : undefined,
+        // 历史恢复时还原工具调用（含面板消息 _panel_output，供图纸预览等面板数据重建）
+        toolCalls: m.metadata?.toolCalls,
       }));
       setMessages(loaded);
     } catch {}

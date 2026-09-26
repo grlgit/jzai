@@ -18,7 +18,7 @@
   "login.passwordPlaceholder": "請輸入密碼",
   "login.submit": "登入",
   "login.loading": "登入中...",
-  "login.defaultHint": "預設帳號 admin / admin123",
+  "login.defaultHint": "",
   "login.footer": "見智 · 企業AI門戶 — 企業全面引入AI的第一入口",
 
   "nav.chat": "對話",

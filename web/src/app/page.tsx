@@ -574,7 +574,7 @@ export default function Home() {
               <h3 className="text-sm font-bold text-gray-800">授权需要重新验证</h3>
             </div>
             <p className="text-xs text-gray-500 mb-4">
-              检测到运行环境变化（容器重建），需要重新验证授权才能使用 AI 服务。
+              授权验证失效（许可证过期、实例信息变更或服务端数据更新），需要重新验证授权才能使用 AI 服务。
               {companyName && <><br />公司：<b>{companyName}</b></>}
             </p>
 

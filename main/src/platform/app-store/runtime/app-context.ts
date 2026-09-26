@@ -13,7 +13,9 @@ import { loadPiAi } from '../../../pi';
 export interface LlmCallOptions {
   prompt: string;
   system?: string;
-  level?: 'default' | 'coding' | 'reasoning' | 'summary';
+  level?: 'default' | 'coding' | 'reasoning' | 'summary' | 'vision';
+  /** 图片输入（视觉模型）：base64 编码图片 + MIME。与 prompt 组成图文混合消息。 */
+  images?: Array<{ data: string; mimeType: string }>;
 }
 
 export interface LlmResult {
@@ -80,17 +82,25 @@ export class AppContext {
     return this.deps.pools.transaction(this.appId, fn);
   }
 
-  /** 经平台 ModelRouter 的 LLM 调用（用量按 appId 记日志） */
+  /** 经平台 ModelRouter 的 LLM 调用（用量按 appId 记日志）；images 提供时走视觉模型（level='vision'） */
   readonly llm = {
     call: async (opts: LlmCallOptions): Promise<LlmResult> => {
       if (!this.deps.modelRouter) throw new Error('LLM service not available');
       const model = this.deps.modelRouter.resolveModelForLevel(opts.level ?? 'default');
       const pi = await loadPiAi();
+      const userContent: string | any[] = opts.images?.length
+        ? [
+            ...opts.images.map((img) => ({ type: 'image', data: img.data, mimeType: img.mimeType })),
+            { type: 'text', text: opts.prompt },
+          ]
+        : opts.prompt;
       const context: { systemPrompt?: string; messages: any[] } = {
-        messages: [{ role: 'user', content: opts.prompt, timestamp: Date.now() }],
+        messages: [{ role: 'user', content: userContent, timestamp: Date.now() }],
       };
       if (opts.system) context.systemPrompt = opts.system;
-      const msg = await pi.completeSimple(model as any, context as any);
+      // 鉴权：与 DynamicAgentService 同源（ModelRouter.getLlmAuthToken），否则官方/自购云端报 No API key
+      const apiKey = this.deps.modelRouter.getLlmAuthToken((model as any).provider);
+      const msg = await pi.completeSimple(model as any, context as any, apiKey ? { apiKey } : undefined);
       if (msg.stopReason === 'error') {
         throw new Error(msg.errorMessage || 'LLM call failed');
       }

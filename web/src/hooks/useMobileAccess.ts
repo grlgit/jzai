@@ -5,6 +5,10 @@ import { useState, useEffect } from 'react';
 import { getMainUrl } from '@/lib/env';
 const MAIN_URL = getMainUrl();
 
+/** 移动端 UA 判定：forceMobile 只在"移动地址 + 移动设备"同时成立时生效，
+ *  避免 PC 经同一局域网地址访问时被强制为手机版式 */
+const MOBILE_UA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i;
+
 interface MobileAccessInfo {
   /** 生效的移动访问地址（已配置值或后端自动探测的 IP+端口） */
   url: string;
@@ -27,8 +31,9 @@ export function useMobileAccess(token: string | null): MobileAccessInfo {
         if (cancelled || !data?.url) { if (!cancelled) setInfo({ url: '', configured: false, forceMobile: false, loading: false }); return; }
         let forceMobile = false;
         try {
-          // host(主机:端口) 一致即视为从移动地址访问
-          forceMobile = new URL(data.url).host.toLowerCase() === window.location.host.toLowerCase();
+          // host(主机:端口) 一致 + 移动设备 UA，才视为从移动地址访问
+          const hostMatch = new URL(data.url).host.toLowerCase() === window.location.host.toLowerCase();
+          forceMobile = hostMatch && MOBILE_UA.test(window.navigator.userAgent);
         } catch {}
         setInfo({ url: data.url, configured: !!data.configured, forceMobile, loading: false });
       })
