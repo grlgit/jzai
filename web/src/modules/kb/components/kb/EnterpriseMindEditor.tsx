@@ -86,7 +86,7 @@ export function EnterpriseMindEditor({
   onSwitchToWiki,
   onUpload,
 }: Props) {
-  const [activeTab, setActiveTab] = React.useState<MindTab>('character')
+  const [activeTab, setActiveTab] = React.useState<MindTab>('knowledge')
   const [personalSubView, setPersonalSubView] = React.useState<'raw' | 'wiki'>('raw')
   const [compiling, setCompiling] = React.useState(false)
   const [selectedDocId, setSelectedDocId] = React.useState<string | null>(null)
@@ -374,12 +374,13 @@ function TabBar({ activeTab, onTabChange, characterCount, rulesCount, knowledgeC
   knowledgeCount: number
   personalCount: number
 }) {
+  // 「企业文化」「行为准则」入口暂隐藏，相关逻辑（种子、容量限制等）保留备后用
   const tabs: { id: MindTab; count: number }[] = [
-    { id: 'character', count: characterCount },
-    { id: 'rules', count: rulesCount },
     { id: 'knowledge', count: knowledgeCount },
     { id: 'personal', count: personalCount },
   ]
+  void characterCount
+  void rulesCount
 
   return (
     <div className="flex items-center gap-1 px-4 py-2 border-b border-border/50">

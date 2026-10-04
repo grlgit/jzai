@@ -17,6 +17,9 @@ import { WikiSelector } from './WikiSelector'
 import { apiFetch } from '../../lib/api'
 import type { AccessScope, DocumentListItem, WikiNode } from '../../lib/types'
 
+// 专项蒸馏入口开关：false 仅隐藏侧栏入口，前后端代码保留备后用
+const SHOW_DISTILL_ENTRY = false
+
 interface Usage {
   total_pages: number
   total_storage_bytes: number
@@ -306,7 +309,8 @@ export function KBSidenav({
         </div>
       )}
 
-      {onDistillToggle && (
+      {/* 专项蒸馏入口暂隐藏，前后端代码保留备后用；恢复时把 SHOW_DISTILL_ENTRY 改回 true 即可 */}
+      {SHOW_DISTILL_ENTRY && onDistillToggle && (
         <div className="shrink-0 px-2 pt-1">
           <button
             onClick={onDistillToggle}

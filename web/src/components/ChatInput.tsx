@@ -30,7 +30,7 @@ interface ChatInputProps {
   offlineHint?: string;
 }
 
-const ACCEPT_EXTS = '.pdf,.xlsx,.xls,.csv,.txt,.doc,.docx,.har,.json,.html,.htm';
+const ACCEPT_EXTS = '.pdf,.xlsx,.xls,.csv,.txt,.doc,.docx,.har,.json,.html,.htm,.dxf';
 
 export default function ChatInput({ onSend, onFileAttach, onAgentSelect, activeAgent, agentList, onClearAgent, pendingAttachments, onRemoveAttachment, disabled, onStop, errorHint, suggestions, onRemoveSuggestion, onClearSuggestions, compact, menuUp, offlineHint }: ChatInputProps) {
   const { t } = useI18n();
