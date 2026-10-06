@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-.DS_Store
-.env
-.env.*
-*.swp
-.pytest_cache/
