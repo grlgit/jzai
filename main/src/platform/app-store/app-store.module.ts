@@ -3,6 +3,7 @@ import { DbModule } from '../../db/db.module';
 import { WorkspaceModule } from '../../workspace/workspace.module';
 import { SkillModule } from '../../capability/skill/skill.module';
 import { McpRegistryModule } from '../../capability/mcp/mcp-registry.module';
+import { KnowledgeModule } from '../../knowledge/knowledge.module';
 import { AppCapabilityModule } from './app-capability.module';
 import { AppRegistryService } from './services/app-registry.service';
 import { AppSchemaService } from './services/app-schema.service';
@@ -16,6 +17,9 @@ import { AppAssetService } from './services/app-asset.service';
 import { AppAuditService } from './services/app-audit.service';
 import { AppCredentialService } from './services/app-credential.service';
 import { AppStagingService } from './services/app-staging.service';
+import { AppLicenseService } from './services/app-license.service';
+import { PackageSignatureService } from './services/package-signature.service';
+import { BuiltinAppSeedService } from './services/builtin-app-seed.service';
 import { SafeArchiveService } from './services/safe-archive.service';
 import { AppInstallOperationService } from './services/app-install-operation.service';
 import { AppLogService } from './services/app-log.service';
@@ -32,13 +36,15 @@ import { DynamicModuleLoader } from './runtime/dynamic-module.loader';
 import { CompanionServiceManager } from './runtime/companion-service.manager';
 import { InvocationContextFactory } from './runtime/invocation-context.factory';
 import { AppStoreController } from './app-store.controller';
+import { AppKbProxyController } from './app-kb-proxy.controller';
 import { AppConnectionBindingController } from './app-connection-binding.controller';
 import { AppServicePrincipalController } from './app-service-principal.controller';
 
 @Module({
-  imports: [DbModule, WorkspaceModule, SkillModule, McpRegistryModule, AppCapabilityModule],
+  imports: [DbModule, WorkspaceModule, SkillModule, McpRegistryModule, AppCapabilityModule, KnowledgeModule],
   controllers: [
     AppStoreController,
+    AppKbProxyController,
     AppConnectionBindingController,
     AppServicePrincipalController,
     DevMcpController,
@@ -59,6 +65,9 @@ import { AppServicePrincipalController } from './app-service-principal.controlle
     AppInstallOperationService,
     SafeArchiveService,
     AppStagingService,
+    AppLicenseService,
+    PackageSignatureService,
+    BuiltinAppSeedService,
     AppInstanceService,
     AppActivationService,
     IsolationService,
@@ -85,6 +94,8 @@ import { AppServicePrincipalController } from './app-service-principal.controlle
     AppLogService,
     AppPlatformService,
     AppConnectionBindingService,
+    AppLicenseService,
+    PackageSignatureService,
   ],
 })
 export class AppStoreModule {}

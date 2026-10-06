@@ -12,6 +12,10 @@ import { ToolBridgeService } from '../../../agent/tool-bridge/tool-bridge.servic
 import { AppCapabilityService } from './app-capability.service';
 import type { AppInstallService } from './app-install.service';
 import type { AppUpgradeService } from './app-upgrade.service';
+import { AppStagingService } from './app-staging.service';
+import { AppInstallOperationService } from './app-install-operation.service';
+import { AppLicenseService } from './app-license.service';
+import { DbService } from '../../../db/db.service';
 import { createServicePrincipal } from '../runtime/invocation-principal';
 
 /**
@@ -46,9 +50,30 @@ export interface AppPlatformFacade {
   describeTool?(toolId: string): Promise<unknown>;
   callTool?(toolId: string, params: unknown): Promise<unknown>;
   readLogs?(appId: string, since?: number): Promise<AppLogEntry[]>;
+  /**
+   * 官网商城中性原语（appstore:market）。
+   * 安全模型：商城 HTTP、订阅判定、License 验签、包验签全部在调用方（闭源 APP）内完成；
+   * 主台只提供本机凭据读取与安装/落库机制，这些原语无法帮助伪造授权——
+   * token 签不出 license，setAppLicense 自身验签，安装链路强制包验签。
+   */
+  market?: {
+    websiteUrl(): Promise<string>;
+    installationToken(): Promise<string>;
+    installationId(): Promise<string>;
+    listInstalledApps(): Promise<Array<{
+      appId: string; version: string; status: string;
+      licenseBlob: string | null; licenseExpiresAt: string | null;
+      installDir: string | null;
+    }>>;
+    installPackage(packagePath: string): Promise<{ appId: string }>;
+    upgradePackage(appId: string, packagePath: string): Promise<void>;
+    setAppLicense(appId: string, licenseBlob: string): Promise<void>;
+    /** 授权审计回写：仅限 'active' | 'license_expired'（其他状态由运行时状态机管理） */
+    setAppStatus(appId: string, status: 'active' | 'license_expired'): Promise<void>;
+  };
 }
 
-const FIRST_PARTY_APP_ID = /^com\.(jianzhi|menhu)\./;
+export const FIRST_PARTY_APP_ID = /^com\.(jianzhi|menhu)\./;
 
 @Injectable()
 export class AppPlatformService {
@@ -59,6 +84,10 @@ export class AppPlatformService {
     private readonly registry: AppRegistryService,
     private readonly logs: AppLogService,
     private readonly capabilities: AppCapabilityService,
+    private readonly db: DbService,
+    private readonly staging: AppStagingService,
+    private readonly operations: AppInstallOperationService,
+    private readonly appLicenses: AppLicenseService,
   ) {}
 
   /**
@@ -83,7 +112,113 @@ export class AppPlatformService {
     if (caps.includes('appstore:read-logs')) {
       facade.readLogs = (appId, since) => Promise.resolve(this.logs.read(appId, since ?? 0));
     }
+    if (caps.includes('appstore:market')) {
+      facade.market = {
+        websiteUrl: () => Promise.resolve(
+          (process.env.JIANZHI_WEBSITE_URL || 'http://198.18.4.231').replace(/\/$/, ''),
+        ),
+        installationToken: () => this.getInstallationToken(),
+        installationId: () => this.getInstallationId(),
+        listInstalledApps: () => this.listInstalledApps(),
+        installPackage: packagePath => this.installPackage(packagePath),
+        upgradePackage: (appId, packagePath) =>
+          this.moduleRef.get(lazyUpgrade(), { strict: false }).upgrade(appId, packagePath),
+        setAppLicense: (appId, licenseBlob) => this.appLicenses.setLicense(appId, licenseBlob),
+        setAppStatus: (appId, status) => this.setAppStatus(appId, status),
+      };
+    }
     return Object.keys(facade).length > 0 ? facade : undefined;
+  }
+
+  // ── market 原语实现 ──
+
+  private async setAppStatus(appId: string, status: 'active' | 'license_expired'): Promise<void> {    if (!['active', 'license_expired'].includes(status)) {
+      throw new Error(`setAppStatus 仅允许 active | license_expired，收到 ${status}`);
+    }
+    const app = await this.registry.findOne(appId);
+    if (!app) throw new Error(`App ${appId} not found`);
+    // 只允许在授权相关状态间迁移，不干预 installing/upgrading/failed 等运行时状态
+    if (!['active', 'license_expired'].includes(app.status)) {
+      throw new Error(`App ${appId} 当前状态 ${app.status} 不允许审计回写`);
+    }
+    await this.registry.updateStatus(appId, status);
+  }
+
+  private async getInstallationToken(): Promise<string> {
+    let rows: any[];
+    try {
+      ({ rows } = await this.db.query(
+        `SELECT installation_token, previous_token, previous_token_expires
+         FROM jz_installation
+         ORDER BY installation_token IS NOT NULL DESC, setup_phase DESC LIMIT 1`,
+      ));
+    } catch {
+      // 老库无 previous_token 列（043 迁移前）
+      ({ rows } = await this.db.query(
+        `SELECT installation_token FROM jz_installation
+         ORDER BY installation_token IS NOT NULL DESC, setup_phase DESC LIMIT 1`,
+      ));
+    }
+    const row = rows[0];
+    if (row?.installation_token) return row.installation_token;
+    if (row?.previous_token && row.previous_token_expires && new Date(row.previous_token_expires) > new Date()) {
+      return row.previous_token;
+    }
+    throw new Error('本实例尚未注册官网账号，无法访问应用商城');
+  }
+
+  private async getInstallationId(): Promise<string> {
+    const { rows } = await this.db.query(
+      `SELECT id FROM jz_installation
+       ORDER BY installation_token IS NOT NULL DESC, setup_phase DESC LIMIT 1`,
+    );
+    if (!rows[0]?.id) throw new Error('本实例 installationId 尚未初始化');
+    return rows[0].id;
+  }
+
+  private async listInstalledApps() {
+    const apps = await this.registry.findAll();
+    return apps.map(a => ({
+      appId: a.appId,
+      version: a.version,
+      status: a.status,
+      licenseBlob: a.licenseBlob ?? null,
+      licenseExpiresAt: a.licenseExpiresAt ? a.licenseExpiresAt.toISOString() : null,
+      installDir: a.installDir ?? null,
+    }));
+  }
+
+  /** stage → 等待校验通过 → installFromStage（同步完成，失败抛错） */
+  private async installPackage(packagePath: string): Promise<{ appId: string }> {
+    const op = this.staging.start(packagePath);
+    const deadline = Date.now() + 10 * 60 * 1000;
+    let status = op;
+    while (Date.now() < deadline) {
+      status = this.operations.get(op.stageId);
+      if (status.phase === 'ready') break;
+      if (['failed', 'expired'].includes(status.phase)) {
+        throw new Error(status.errors.join('; ') || status.message);
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    if (status.phase !== 'ready') throw new Error('安装准备超时');
+
+    const stageDir = this.operations.getInstallStageDir(op.stageId);
+    const integrity = this.operations.getIntegrity(op.stageId);
+    try {
+      await this.moduleRef.get(lazyInstall(), { strict: false }).installFromStage(
+        stageDir, {}, () => {},
+        {
+          purgeOrphanedData: false,
+          packageSha256: integrity?.packageSha256 ?? null,
+          signatureVerified: integrity?.signatureVerified ?? false,
+        },
+      );
+      this.operations.succeed(op.stageId);
+    } finally {
+      this.operations.clearStageDir(op.stageId);
+    }
+    return { appId: status.manifest!.appId };
   }
 
   // ── 实现 ──

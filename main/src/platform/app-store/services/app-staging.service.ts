@@ -6,6 +6,8 @@ import { AppManifestSchema } from '../validators/manifest.schema';
 import { AppValidatorService } from '../validators/app-validator.service';
 import { AppRegistryService } from './app-registry.service';
 import { SafeArchiveService } from './safe-archive.service';
+import { PackageSignatureService } from './package-signature.service';
+import { FIRST_PARTY_APP_ID } from './app-platform.service';
 import {
   AppInstallOperationService,
   AppInstallOperationStatus,
@@ -20,6 +22,7 @@ export class AppStagingService {
     private readonly registry: AppRegistryService,
     private readonly operations: AppInstallOperationService,
     private readonly archives: SafeArchiveService,
+    private readonly signatures: PackageSignatureService,
   ) {}
 
   start(packagePath: string): AppInstallOperationStatus {
@@ -31,6 +34,9 @@ export class AppStagingService {
   private async stage(packagePath: string, stageId: string): Promise<void> {
     let stageDir: string | undefined;
     try {
+      // 包文件 hash 先行（stage 结束后包文件会被删除）
+      const packageSha256 = await this.signatures.hashFile(packagePath);
+
       stageDir = path.join(os.tmpdir(), `jzapp_stage_${stageId}`);
       this.operations.setStageDir(stageId, stageDir);
       this.operations.update(stageId, 'unpacking', 15, '正在解包应用包…');
@@ -57,10 +63,25 @@ export class AppStagingService {
       const manifest = AppManifestSchema.parse(
         JSON.parse(fs.readFileSync(path.join(stageDir, 'manifest.json'), 'utf-8')),
       );
+
+      // 包签名验签：官方包（com.jianzhi.*/com.menhu.*）强制，第三方包无签名仅告警
+      const sigResult = this.signatures.verifyDirectory(stageDir);
+      const sigCheck = this.signatures.check(sigResult, FIRST_PARTY_APP_ID.test(manifest.appId));
+      if (!sigCheck.ok) {
+        this.operations.fail(stageId, sigCheck.warning!);
+        this.operations.clearStageDir(stageId);
+        return;
+      }
+      const signatureVerified = sigResult.status === 'valid';
+      this.operations.setIntegrity(stageId, { packageSha256, signatureVerified });
+
+      const warnings = report.warnings.map(result => result.message);
+      if (sigCheck.warning && sigResult.status !== 'valid') warnings.push(sigCheck.warning);
+
       this.operations.setReady(
         stageId,
         { appId: manifest.appId, version: manifest.version, name: manifest.name },
-        report.warnings.map(result => result.message),
+        warnings,
       );
     } catch (err: any) {
       this.logger.error(`Failed to stage app package ${stageId}: ${err.message}`, err.stack);

@@ -10,7 +10,11 @@ import { AppRegistryService } from './app-registry.service';
 import { AppMigrationService } from './app-migration.service';
 import { AppPoolService } from './app-pool.service';
 import { AppActivationService } from './app-activation.service';
+import { AppLicenseService } from './app-license.service';
 import { SafeArchiveService } from './safe-archive.service';
+import { PackageSignatureService } from './package-signature.service';
+import { FIRST_PARTY_APP_ID } from './app-platform.service';
+import { copyDirCompat } from './app-install.service';
 import { emitAppUpdated } from '../runtime/app-events';
 
 @Injectable()
@@ -25,12 +29,15 @@ export class AppUpgradeService {
     private readonly migrations: AppMigrationService,
     private readonly pools: AppPoolService,
     private readonly activation: AppActivationService,
+    private readonly signatures: PackageSignatureService,
+    private readonly appLicenses: AppLicenseService,
   ) {}
 
   async upgrade(appId: string, packagePath: string): Promise<void> {
     const existing = await this.registry.findOne(appId);
     if (!existing) throw new NotFoundException(`App ${appId} not found`);
 
+    const packageSha256 = await this.signatures.hashFile(packagePath);
     const extractDir = await this.extractToTemp(packagePath);
     try {
       // Validate new package without treating the currently installed release as another app.
@@ -69,6 +76,14 @@ export class AppUpgradeService {
         throw new BadRequestException(`Cannot change appId during upgrade`);
       }
 
+      // 包签名验签（与安装同级强制）
+      const sigResult = this.signatures.verifyDirectory(extractDir);
+      const sigCheck = this.signatures.check(sigResult, FIRST_PARTY_APP_ID.test(manifest.appId));
+      if (!sigCheck.ok) {
+        throw new BadRequestException(sigCheck.warning);
+      }
+      const signatureVerified = sigResult.status === 'valid';
+
       // 版本目录 + active 指针（extract_dir）协议：
       // 新包写入独立的 versions/<version> 目录，旧目录全程不动；
       // 激活成功后 updateManifest 才切换指针。任何失败自动回滚旧版本。
@@ -97,7 +112,7 @@ export class AppUpgradeService {
 
         // 2. Stage new version into its own immutable directory
         fs.mkdirSync(newDir, { recursive: true });
-        fs.cpSync(extractDir, newDir, { recursive: true });
+        copyDirCompat(extractDir, newDir);
 
         // 3. Run incremental migrations（三态 journal，可重试不重复）
         if (manifest.database && this.pools.hasPool(appId)) {
@@ -113,7 +128,18 @@ export class AppUpgradeService {
 
         // 5. 全部成功后最后切换 active 指针
         await this.registry.updateManifest(appId, manifest, newDir);
-        await this.registry.updateStatus(appId, 'active');
+        await this.registry.updatePackageIntegrity(appId, packageSha256, signatureVerified);
+
+        // 订阅 License 门控：升级后 license 无效（如已过期）→ license_expired
+        let finalStatus: 'active' | 'license_expired' = 'active';
+        if (manifest.requiresLicense) {
+          const licensed = await this.appLicenses.hasValidLicense(appId, existing.licenseBlob);
+          if (!licensed) {
+            finalStatus = 'license_expired';
+            this.logger.log(`App ${appId} requires license but none valid after upgrade — license_expired`);
+          }
+        }
+        await this.registry.updateStatus(appId, finalStatus);
         emitAppUpdated(appId, manifest.version);
 
         // 6. 清理旧版本目录（尽力而为，失败不影响升级结果）

@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DbService } from '../../../db/db.service';
 import { AppManifest } from '../validators/manifest.schema';
 
-export type AppStatus = 'installing' | 'active' | 'failed' | 'uninstalling' | 'uninstalled' | 'upgrading';
+export type AppStatus = 'installing' | 'active' | 'failed' | 'uninstalling' | 'uninstalled' | 'upgrading' | 'license_expired';
 
 export interface InstalledApp {
   id: string;
@@ -17,7 +17,17 @@ export interface InstalledApp {
   installedAt: Date;
   updatedAt: Date;
   installDir?: string;
+  licenseBlob?: string | null;
+  licenseExpiresAt?: Date | null;
+  packageSha256?: string | null;
+  signatureVerified?: boolean;
 }
+
+const APP_COLUMNS = `id, app_id as "appId", short_name as "shortName", ns_prefix as "nsPrefix",
+  version, name, manifest, config, status,
+  installed_at as "installedAt", updated_at as "updatedAt", extract_dir as "installDir",
+  license_blob as "licenseBlob", license_expires_at as "licenseExpiresAt",
+  package_sha256 as "packageSha256", signature_verified as "signatureVerified"`;
 
 @Injectable()
 export class AppRegistryService {
@@ -27,9 +37,7 @@ export class AppRegistryService {
 
   async findAll(): Promise<InstalledApp[]> {
     const { rows } = await this.db.query(
-      `SELECT id, app_id as "appId", short_name as "shortName", ns_prefix as "nsPrefix",
-              version, name, manifest, config, status,
-              installed_at as "installedAt", updated_at as "updatedAt", extract_dir as "installDir"
+      `SELECT ${APP_COLUMNS}
        FROM jz_installed_apps
        WHERE status != 'uninstalled'
        ORDER BY installed_at`,
@@ -39,9 +47,7 @@ export class AppRegistryService {
 
   async findOne(appId: string): Promise<InstalledApp | null> {
     const { rows } = await this.db.query(
-      `SELECT id, app_id as "appId", short_name as "shortName", ns_prefix as "nsPrefix",
-              version, name, manifest, config, status,
-              installed_at as "installedAt", updated_at as "updatedAt", extract_dir as "installDir"
+      `SELECT ${APP_COLUMNS}
        FROM jz_installed_apps
        WHERE app_id = $1`,
       [appId],
@@ -75,6 +81,26 @@ export class AppRegistryService {
     await this.db.query(
       `UPDATE jz_installed_apps SET status = $1, updated_at = NOW() WHERE app_id = $2`,
       [status, appId],
+    );
+  }
+
+  /** 写入/刷新 APP 订阅 License（续期覆盖） */
+  async updateLicense(appId: string, licenseBlob: string, expiresAt: Date | null): Promise<void> {
+    await this.db.query(
+      `UPDATE jz_installed_apps
+       SET license_blob = $1, license_expires_at = $2, updated_at = NOW()
+       WHERE app_id = $3`,
+      [licenseBlob, expiresAt, appId],
+    );
+  }
+
+  /** 记录安装包的完整性信息 */
+  async updatePackageIntegrity(appId: string, sha256: string | null, signatureVerified: boolean): Promise<void> {
+    await this.db.query(
+      `UPDATE jz_installed_apps
+       SET package_sha256 = $1, signature_verified = $2, updated_at = NOW()
+       WHERE app_id = $3`,
+      [sha256, signatureVerified, appId],
     );
   }
 

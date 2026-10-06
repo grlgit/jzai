@@ -43,14 +43,13 @@ function deriveKey(): Buffer {
 }
 
 /**
- * Verify and decrypt a license string.
+ * Verify signature and decrypt a sealed payload.
  * Format: base64( signature(64) + iv(12) + authTag(16) + ciphertext )
  *
- * @throws Error if signature invalid, decryption fails, license is a legacy v1
- *         license, or installationId does not match this installation
+ * @throws Error if signature invalid or decryption fails
  */
-export function verifyLicense(licenseStr: string, localInstallationId: string): LicensePayload {
-  const combined = Buffer.from(licenseStr, 'base64');
+export function unseal(sealed: string): unknown {
+  const combined = Buffer.from(sealed, 'base64');
   if (combined.length < 64 + 12 + 16 + 1) {
     throw new Error('License too short');
   }
@@ -81,7 +80,17 @@ export function verifyLicense(licenseStr: string, localInstallationId: string): 
     throw new Error('License decryption failed (legacy v1 license?)');
   }
 
-  const payload: LicensePayload = JSON.parse(plaintext.toString('utf-8'));
+  return JSON.parse(plaintext.toString('utf-8'));
+}
+
+/**
+ * Verify and decrypt a platform license string.
+ *
+ * @throws Error if signature invalid, decryption fails, license is a legacy v1
+ *         license, or installationId does not match this installation
+ */
+export function verifyLicense(licenseStr: string, localInstallationId: string): LicensePayload {
+  const payload = unseal(licenseStr) as LicensePayload;
 
   // v1 licenses (fingerprint-bound) are no longer accepted — trigger re-registration
   if (payload.version !== 2) {

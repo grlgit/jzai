@@ -180,9 +180,10 @@ export class AppStoreController {
     options: { purgeOrphanedData: boolean },
   ): Promise<void> {
     try {
+      const integrity = this.operations.getIntegrity(stageId);
       await this.install.installFromStage(stageDir, config, (phase, percent, message) => {
         this.operations.update(stageId, phase, percent, message);
-      }, options);
+      }, { ...options, ...integrity });
       this.operations.clearStageDir(stageId);
       this.operations.succeed(stageId);
     } catch (err: any) {

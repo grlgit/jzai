@@ -212,6 +212,7 @@ function createDependencies(workspaceRoot: string) {
     create: jest.fn().mockResolvedValue(undefined),
     restore: jest.fn().mockResolvedValue(undefined),
     updateStatus: jest.fn().mockResolvedValue(undefined),
+    updatePackageIntegrity: jest.fn().mockResolvedValue(undefined),
     delete: jest.fn().mockResolvedValue(undefined),
   };
   const schema = {
@@ -251,6 +252,8 @@ function createDependencies(workspaceRoot: string) {
     activation as any,
     { replaceForApp: jest.fn(), removeForApp: jest.fn().mockResolvedValue(undefined) } as any,
     { extractAndStoreSecrets: jest.fn((_appId: string, config: any) => Promise.resolve(config)), deleteAllSecrets: jest.fn().mockResolvedValue(undefined) } as any,
+    { hashFile: jest.fn().mockResolvedValue('sha256'), verifyDirectory: jest.fn().mockReturnValue({ status: 'unsigned' }), check: jest.fn().mockReturnValue({ ok: true }) } as any,
+    { hasValidLicense: jest.fn().mockResolvedValue(true) } as any,
   );
 
   return { service, registry, schema, migrations, pools, activation };

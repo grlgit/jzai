@@ -10,13 +10,18 @@ const MAIN_URL = getMainUrl();
 
 interface InstalledApp {
   appId: string;
-  name: string;
+  name: string | Record<string, string>;
   version: string;
   status: string;
   description?: string;
   manifest?: {
     panels?: { id: string; name: { zh?: string; en?: string }; icon?: string; description?: string }[];
   };
+}
+
+function appDisplayName(name: InstalledApp['name'], fallback: string): string {
+  if (typeof name === 'string') return name || fallback;
+  return name?.zh || name?.en || fallback;
 }
 
 function PanelIcon({ icon, size = 28 }: { icon: string; size?: number }) {
@@ -197,7 +202,10 @@ export default function Sidebar({ active, onNavigate, panels, onCustomize }: Sid
               onClick={(e) => {
                 if (appMenuOpen) { setAppMenuOpen(false); return; }
                 const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                setAppMenuPos({ top: rect.top, left: rect.right + 4 });
+                // 按视口高度钳制 top，保证弹出层完整显示（弹出层 max-h 70vh）
+                const menuMaxHeight = Math.round(window.innerHeight * 0.7);
+                const top = Math.max(8, Math.min(rect.top, window.innerHeight - menuMaxHeight - 8));
+                setAppMenuPos({ top, left: rect.right + 4 });
                 setAppMenuOpen(true);
               }}
               className={btnClass(appMenuOpen)}
@@ -208,32 +216,53 @@ export default function Sidebar({ active, onNavigate, panels, onCustomize }: Sid
           </div>
         )}
 
-        {appMenuOpen && (
-          <div ref={appMenuRef} className="fixed bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50 min-w-[180px] max-w-[260px]"
-            style={{ top: appMenuPos.top, left: appMenuPos.left }}>
-            <div className="text-[10px] text-gray-400 px-3 py-1">{panelName(appsPanel!)}</div>
-            {installedApps.filter(a => a.status === 'active').length === 0 ? (
-              <div className="px-3 py-2 text-xs text-gray-400">暂无已安装应用</div>
-            ) : (
-              installedApps.filter(a => a.status === 'active').flatMap(app =>
-                (app.manifest?.panels ?? []).map(panel => (
-                  <button
-                    key={`${app.appId}-${panel.id}`}
-                    onClick={() => { onNavigate(panel.id); setAppMenuOpen(false); }}
-                    className={`w-full text-left px-3 py-2 flex items-start gap-2 text-sm hover:bg-gray-50 ${active === panel.id ? 'text-indigo-600 bg-indigo-50' : 'text-gray-600'}`}
-                    title={app.description}
-                  >
-                    <span className="shrink-0"><PanelIcon icon={panel.icon || '📦'} size={18} /></span>
-                    <div className="min-w-0">
-                      <div className="font-medium truncate">{panelName({ ...panel, id: panel.id, name: panel.name?.zh || panel.name?.en || panel.id, nameI18n: panel.name } as any)}</div>
-                      <div className="text-[10px] text-gray-400 truncate">{app.description || app.appId}</div>
+        {appMenuOpen && (() => {
+          const activeApps = installedApps
+            .filter(a => a.status === 'active')
+            .map(a => ({ ...a, entryPanels: a.manifest?.panels ?? [] }))
+            .filter(a => a.entryPanels.length > 0);
+          const panelTitle = (p: { id: string; name?: { zh?: string; en?: string } }) => {
+            const lang = locale.startsWith('zh') ? 'zh' : 'en';
+            return p.name?.[lang] || p.name?.zh || p.name?.en || p.id;
+          };
+          return (
+            <div ref={appMenuRef} className="fixed bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-3 w-[520px] max-w-[90vw] max-h-[70vh] overflow-y-auto"
+              style={{ top: appMenuPos.top, left: appMenuPos.left }}>
+              <div className="text-[10px] text-gray-400 px-1 pb-2">{panelName(appsPanel!)}</div>
+              {activeApps.length === 0 ? (
+                <div className="px-3 py-2 text-xs text-gray-400">暂无已安装应用</div>
+              ) : (
+                <div className="flex flex-wrap gap-2.5">
+                  {activeApps.map(app => (
+                    <div key={app.appId} className="flex-1 min-w-[210px] max-w-full bg-gray-50 rounded-lg p-2.5">
+                      {/* APP 分组头 */}
+                      <div className="flex items-baseline gap-1.5 px-1 pb-1.5 mb-1.5 border-b border-gray-200" title={app.appId}>
+                        <span className="text-xs font-semibold text-gray-800 truncate">{appDisplayName(app.name, app.appId)}</span>
+                        <span className="text-[10px] text-gray-400 shrink-0">v{app.version}</span>
+                      </div>
+                      {/* 功能入口（一个 APP 可多个） */}
+                      <div className="flex flex-wrap gap-1">
+                        {app.entryPanels.map(panel => (
+                          <button
+                            key={`${app.appId}-${panel.id}`}
+                            onClick={() => { onNavigate(panel.id); setAppMenuOpen(false); }}
+                            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm hover:bg-white hover:shadow-sm transition-all ${
+                              active === panel.id ? 'text-indigo-600 bg-white shadow-sm' : 'text-gray-600'
+                            }`}
+                            title={panel.description || app.description}
+                          >
+                            <span className="shrink-0"><PanelIcon icon={panel.icon || '📦'} size={16} /></span>
+                            <span className="truncate max-w-[140px]">{panelTitle(panel)}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </button>
-                ))
-              )
-            )}
-          </div>
-        )}
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
         <div className="flex-1" />
 

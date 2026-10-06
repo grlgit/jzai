@@ -55,6 +55,7 @@ describe('AppUpgradeService validation', () => {
       getExistingIds: jest.fn().mockResolvedValue(ids),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       updateManifest: jest.fn().mockResolvedValue(undefined),
+      updatePackageIntegrity: jest.fn().mockResolvedValue(undefined),
     };
     const archives = {
       extract: jest.fn(async (_archive, destination) => {
@@ -77,6 +78,8 @@ describe('AppUpgradeService validation', () => {
       { getCurrentVersion: jest.fn().mockResolvedValue(0) } as any,
       { hasPool: () => false } as any,
       activation as any,
+      { hashFile: jest.fn().mockResolvedValue('sha256'), verifyDirectory: jest.fn().mockReturnValue({ status: 'unsigned' }), check: jest.fn().mockReturnValue({ ok: true }) } as any,
+      { hasValidLicense: jest.fn().mockResolvedValue(true) } as any,
     );
 
     await service.upgrade(manifest.appId, path.join(root, 'package.jzapp'));
@@ -120,6 +123,7 @@ describe('AppUpgradeService atomic rollback', () => {
       }),
       updateStatus: jest.fn().mockResolvedValue(undefined),
       updateManifest: jest.fn().mockResolvedValue(undefined),
+      updatePackageIntegrity: jest.fn().mockResolvedValue(undefined),
     };
     const validator = {
       validate: jest.fn().mockResolvedValue({ passed: true, criticals: [], warnings: [], all: [] }),
@@ -154,6 +158,8 @@ describe('AppUpgradeService atomic rollback', () => {
       migrations as any,
       pools as any,
       activation as any,
+      { hashFile: jest.fn().mockResolvedValue('sha256'), verifyDirectory: jest.fn().mockReturnValue({ status: 'unsigned' }), check: jest.fn().mockReturnValue({ ok: true }) } as any,
+      { hasValidLicense: jest.fn().mockResolvedValue(true) } as any,
     );
     return { service, registry, activation, migrations };
   }

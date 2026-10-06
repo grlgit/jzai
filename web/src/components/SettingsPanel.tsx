@@ -7,11 +7,10 @@ import { useShortcuts } from '@/hooks/useShortcuts';
 import DashboardPanel from '@/components/DashboardPanel';
 import { useSidebar } from '@/hooks/useSidebar';
 import { useMessageDisplay } from '@/hooks/useMessageDisplay';
-import KBArchitectureTab from '@/components/KBArchitectureTab';
 import OemConsolePanel from '@/components/OemConsolePanel';
+import DevMcpCard from '@/components/DevMcpCard';
 import { useAuth } from '@/hooks/useAuth';
 import UserManagePanel from '@/components/UserManagePanel';
-import AppsSettingsTab from '@/components/AppsSettingsTab';
 
 import { getMainUrl } from '@/lib/env';
 const MAIN_URL = getMainUrl();
@@ -41,7 +40,7 @@ function authHeaders(): Record<string, string> {
 
 export default function SettingsPanel() {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<'model' | 'toolMgmt' | 'general' | 'credentials' | 'analytics' | 'knowledgeArch' | 'oem' | 'users' | 'apps'>('model');
+  const [activeTab, setActiveTab] = useState<'model' | 'toolMgmt' | 'general' | 'credentials' | 'analytics' | 'oem' | 'users'>('model');
   // Note: 'credentials' tab is hidden from the tab bar but still rendered for backward compatibility
   const [toolsSubTab, setToolsSubTab] = useState<'builtin' | 'custom' | 'mcp' | 'email'>('builtin');
   const [generalSubTab, setGeneralSubTab] = useState<'msgDisplay' | 'license' | 'system' | 'shortcuts'>('msgDisplay');
@@ -388,7 +387,7 @@ export default function SettingsPanel() {
   return (
     <div className="p-6 overflow-y-auto h-full">
       <div className="flex gap-2 mb-6">
-        {([['model', t('settings.models')], ['toolMgmt', '工具管理'], ['credentials', '系统凭证'], ['knowledgeArch', '知识架构'], ['analytics', '运营分析'], ['oem', 'OEM 接入'], ['users', '用户与组织'], ['apps', '应用管理'], ['general', '系统通用']] as const).filter(([tab]) => tab !== 'credentials' && (tab !== 'users' || canManageUsers)).map(([tab, label]) => (
+        {([['model', t('settings.models')], ['toolMgmt', '工具管理'], ['credentials', '系统凭证'], ['analytics', '运营分析'], ['oem', '三方扩展'], ['users', '用户与组织'], ['general', '系统通用']] as const).filter(([tab]) => tab !== 'credentials' && (tab !== 'users' || canManageUsers)).map(([tab, label]) => (
           <button key={tab} onClick={() => {
             setActiveTab(tab);
             if (tab === 'toolMgmt') {
@@ -1295,10 +1294,12 @@ export default function SettingsPanel() {
         </div>
       )}
 
-      {activeTab === 'knowledgeArch' && <KBArchitectureTab />}
 
       {activeTab === 'oem' && (
-        <div className="-mx-6 -mb-6 h-[calc(100%-2rem)]">
+        <div className="-mx-6 -mb-6 h-[calc(100%-2rem)] overflow-y-auto">
+          <div className="px-6 pt-4">
+            <DevMcpCard />
+          </div>
           <OemConsolePanel />
         </div>
       )}
@@ -1309,7 +1310,6 @@ export default function SettingsPanel() {
         </div>
       )}
 
-      {activeTab === 'apps' && <AppsSettingsTab />}
     </div>
   );
 }

@@ -6,10 +6,10 @@
  * 注意：仅纯 JS 依赖可随包分发，且必须在平台 BACKEND_DEP_WHITELIST 白名单内；
  * 原生模块（.node）不可（sharp 等白名单预编译包除外）。
  */
-import { cpSync, existsSync, mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = process.cwd();
@@ -72,6 +72,45 @@ try {
   }
 
   rmSync(join(stagingDir, 'package-lock.json'), { force: true });
+
+  // ── 包签名（设置 APP_PACKAGE_PRIVATE_KEY 时启用）──
+  // 生成 PACKAGE-SIGNATURE.json：{files:{相对路径:sha256}, signature}
+  // 文件集合必须与 zip 产物一致（复刻下方 zip -x 排除规则）
+  if (process.env.APP_PACKAGE_PRIVATE_KEY) {
+    const { createHash, createPrivateKey, sign } = await import('node:crypto');
+    const zipExcludeBasename = (rel) => {
+      const base = rel.split('/').pop();
+      if (base.startsWith('._') || base === '.DS_Store') return true;
+      if (rel.includes('node_modules/')) {
+        if (/\.(map|md|d\.ts|d\.mts|ts)$/.test(base)) return true;
+        if (/^(LICENSE|CHANGELOG)/.test(base)) return true;
+        if (base === 'Makefile' || base === 'tsconfig.json') return true;
+      }
+      return false;
+    };
+    const files = {};
+    const walk = (dir) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = join(dir, entry.name);
+        if (entry.isDirectory()) { walk(full); continue; }
+        if (!entry.isFile()) continue;
+        const rel = full.slice(stagingDir.length + 1).split(sep).join('/');
+        if (zipExcludeBasename(rel)) continue;
+        files[rel] = createHash('sha256').update(readFileSync(full)).digest('hex');
+      }
+    };
+    walk(stagingDir);
+    const sorted = {};
+    for (const k of Object.keys(files).sort()) sorted[k] = files[k];
+    const canonical = JSON.stringify({ files: sorted });
+    const privateKey = createPrivateKey(process.env.APP_PACKAGE_PRIVATE_KEY.replace(/\\n/g, '\n'));
+    const signature = sign(null, Buffer.from(canonical, 'utf8'), privateKey).toString('base64');
+    writeFileSync(join(stagingDir, 'PACKAGE-SIGNATURE.json'), JSON.stringify({ files: sorted, signature }));
+    console.log(`Signed package (${Object.keys(files).length} files)`);
+  } else {
+    console.log('APP_PACKAGE_PRIVATE_KEY 未设置 —— 跳过包签名（官方包安装将被平台拒绝）');
+  }
+
   rmSync(archivePath, { force: true });
   execFileSync('zip', [
     '-qry', archivePath, '.',

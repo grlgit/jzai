@@ -16,6 +16,11 @@ export type AppInstallPhase =
 
 export type AppInstallRecovery = 'purge-orphaned-data';
 
+export interface AppPackageIntegrity {
+  packageSha256: string | null;
+  signatureVerified: boolean;
+}
+
 export interface AppInstallOperationStatus {
   stageId: string;
   phase: AppInstallPhase;
@@ -34,6 +39,7 @@ export interface AppInstallOperationStatus {
 
 interface AppInstallOperation extends AppInstallOperationStatus {
   stageDir?: string;
+  integrity?: AppPackageIntegrity;
 }
 
 @Injectable()
@@ -98,6 +104,14 @@ export class AppInstallOperationService {
 
   setStageDir(stageId: string, stageDir: string): void {
     this.require(stageId).stageDir = stageDir;
+  }
+
+  setIntegrity(stageId: string, integrity: AppPackageIntegrity): void {
+    this.require(stageId).integrity = integrity;
+  }
+
+  getIntegrity(stageId: string): AppPackageIntegrity | undefined {
+    return this.require(stageId).integrity;
   }
 
   setReady(

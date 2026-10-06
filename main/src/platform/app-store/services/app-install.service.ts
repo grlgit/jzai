@@ -3,6 +3,26 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
+
+/**
+ * fs.cpSync 的兼容替代：部分文件系统（macOS Docker Desktop gRPC FUSE、某些 NFS）
+ * 不支持 cpSync 内部使用的 copyfile/clonefile 调用，会确定性 EACCES 并留下
+ * mode-200 空文件。改用 mkdir + readFile/writeFile 的朴素递归复制。
+ */
+export function copyDirCompat(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirCompat(s, d);
+    } else if (entry.isFile()) {
+      fs.writeFileSync(d, fs.readFileSync(s));
+    } else if (entry.isSymbolicLink()) {
+      fs.symlinkSync(fs.readlinkSync(s), d);
+    }
+  }
+}
 import { WorkspaceService } from '../../../workspace/workspace.service';
 import { AppManifest, AppManifestSchema } from '../validators/manifest.schema';
 import { AppValidatorService } from '../validators/app-validator.service';
@@ -13,7 +33,10 @@ import { AppPoolService } from './app-pool.service';
 import { AppActivationService } from './app-activation.service';
 import { AppCapabilityService } from './app-capability.service';
 import { AppCredentialService } from './app-credential.service';
+import { AppLicenseService } from './app-license.service';
 import { SafeArchiveService } from './safe-archive.service';
+import { PackageSignatureService } from './package-signature.service';
+import { FIRST_PARTY_APP_ID } from './app-platform.service';
 import { emitAppUpdated } from '../runtime/app-events';
 
 export type AppInstallProgressReporter = (
@@ -26,6 +49,9 @@ export const ORPHANED_DATABASE_RESOURCES_ERROR = 'APP_DATABASE_RESIDUE';
 
 export interface AppInstallOptions {
   purgeOrphanedData?: boolean;
+  /** stage 阶段已计算的包完整性信息（直接 install() 路径现场计算） */
+  packageSha256?: string | null;
+  signatureVerified?: boolean;
 }
 
 interface FailedInstallResources {
@@ -52,6 +78,8 @@ export class AppInstallService {
     private readonly activation: AppActivationService,
     private readonly capabilities: AppCapabilityService,
     private readonly credentials: AppCredentialService,
+    private readonly signatures: PackageSignatureService,
+    private readonly appLicenses: AppLicenseService,
   ) {}
 
   async validatePackage(packagePath: string) {
@@ -77,9 +105,10 @@ export class AppInstallService {
     config: Record<string, unknown> = {},
     reportProgress?: AppInstallProgressReporter,
   ): Promise<void> {
+    const packageSha256 = await this.signatures.hashFile(packagePath);
     const extractDir = await this.extractToTemp(packagePath);
     try {
-      await this.installFromStage(extractDir, config, reportProgress);
+      await this.installFromStage(extractDir, config, reportProgress, { packageSha256 });
     } finally {
       fs.rmSync(extractDir, { recursive: true, force: true });
     }
@@ -112,6 +141,15 @@ export class AppInstallService {
     const manifest = AppManifestSchema.parse(
       JSON.parse(fs.readFileSync(path.join(extractDir, 'manifest.json'), 'utf-8')),
     );
+
+    // 包签名验签（install 为最终强制点；stage 已做 fail-fast）
+    const sigResult = this.signatures.verifyDirectory(extractDir);
+    const sigCheck = this.signatures.check(sigResult, FIRST_PARTY_APP_ID.test(manifest.appId));
+    if (!sigCheck.ok) {
+      throw new BadRequestException(sigCheck.warning);
+    }
+    const signatureVerified = sigResult.status === 'valid';
+
     const existing = await this.registry.findOne(manifest.appId);
     const restoring = existing?.status === 'uninstalled';
     if (existing && !restoring) {
@@ -162,7 +200,7 @@ export class AppInstallService {
       }
       fs.mkdirSync(installDir, { recursive: true });
       resources.installDirCreated = true;
-      fs.cpSync(extractDir, installDir, { recursive: true });
+      copyDirCompat(extractDir, installDir);
 
       // secret 字段：密文入 credential store，registry 只保留 secret:// 引用（先 extract 再落库，避免明文写入）
       config = await this.credentials.extractAndStoreSecrets(manifest.appId, config, manifest);
@@ -173,6 +211,9 @@ export class AppInstallService {
         await this.registry.create(manifest, config, installDir);
         resources.registryCreated = true;
       }
+      await this.registry.updatePackageIntegrity(
+        manifest.appId, options.packageSha256 ?? null, signatureVerified,
+      );
 
       if (manifest.database) {
         const rolePassword = crypto.randomBytes(32).toString('hex');
@@ -200,7 +241,18 @@ export class AppInstallService {
       reportProgress?.('activating', 90, '正在激活应用面板和工具…');
       resources.activationStarted = true;
       await this.activation.activateApp(manifest.appId, installDir, manifest);
-      await this.registry.updateStatus(manifest.appId, 'active');
+
+      // 订阅 License 门控：requiresLicense 且无有效 license → license_expired（安装成功但不可用）
+      let finalStatus: 'active' | 'license_expired' = 'active';
+      if (manifest.requiresLicense) {
+        const licensed = await this.appLicenses.hasValidLicense(manifest.appId, existing?.licenseBlob);
+        if (!licensed) {
+          finalStatus = 'license_expired';
+          reportProgress?.('activating', 95, '应用已安装，需在应用商城订阅授权后使用');
+          this.logger.log(`App ${manifest.appId} requires license — installed as license_expired`);
+        }
+      }
+      await this.registry.updateStatus(manifest.appId, finalStatus);
       emitAppUpdated(manifest.appId, manifest.version);
       this.logger.log(`App ${manifest.appId} installed successfully`);
     } catch (err) {
