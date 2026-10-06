@@ -21,7 +21,6 @@ const SEED_ROLES = [
 ];
 
 const SEED_PANELS = [
-  { id: 'kb', name: '企业心智', icon: 'img:/icons/智库.svg', permission: 'kb:read', isBuiltin: false, sortOrder: 1 },
   { id: 'cw', name: 'CoWorker', icon: 'img:/icons/AI员工.svg', permission: 'cw:view', isBuiltin: false, sortOrder: 2 },
   { id: 'dash', name: '看板', icon: 'img:/icons/看板.svg', permission: 'dash:view', isBuiltin: false, sortOrder: 3 },
   { id: 'skills', name: '技能', icon: 'img:/icons/技能.svg', permission: 'cfg:automation', isBuiltin: false, sortOrder: 4 },

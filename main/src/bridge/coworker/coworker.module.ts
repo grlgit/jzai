@@ -19,7 +19,7 @@ import { GatewayHealthService } from './gateway-health.service';
 import { DbModule } from '../../db/db.module';
 import { UserModule } from '../../user/user.module';
 import { ModelRouterModule } from '../../model-router/model-router.module';
-import { McpToolsModule } from '../knowledge/mcp-tools.module';
+import { KnowledgeModule } from '../../knowledge/knowledge.module';
 import { WorkspaceModule } from '../../workspace/workspace.module';
 import { CacheModule } from '../../cache/cache.module';
 import { EditionModule } from '../../edition/edition.module';
@@ -28,7 +28,7 @@ import { AgentModule } from '../../agent/agent.module';
 import { McpRegistryModule } from '../../capability/mcp/mcp-registry.module';
 
 @Module({
-  imports: [DbModule, UserModule, ModelRouterModule, McpToolsModule, WorkspaceModule, EditionModule, SkillModule, CacheModule, AgentModule, McpRegistryModule],
+  imports: [DbModule, UserModule, ModelRouterModule, KnowledgeModule, WorkspaceModule, EditionModule, SkillModule, CacheModule, AgentModule, McpRegistryModule],
   controllers: [CoWorkerController, CoWorkerVerifyController],
   providers: [
     CoWorkerService, CoWorkerConfigService, CoWorkerProxyService, CoWorkerBuildService,

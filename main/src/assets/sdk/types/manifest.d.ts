@@ -101,4 +101,11 @@ export interface AppManifest {
   }>;
   /** 声明要经 ctx.tools.call 调用的平台内置工具（分级白名单内） */
   usesPlatformTools?: string[];
+  /**
+   * APP 知识空间声明（T2）：安装/激活时按声明创建 APP 空间。
+   * 声明 [{}] = 单空间 app-{appId}；带 slug = app-{appId}-{slug} 多空间。
+   */
+  knowledge?: {
+    spaces?: Array<{ slug?: string; name?: string }>;
+  };
 }

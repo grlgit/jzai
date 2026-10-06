@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
 import { OcrService } from './ocr.service';
-import { KbModule } from '../../bridge/knowledge/kb.module';
+import { KnowledgeModule } from '../../knowledge/knowledge.module';
 
 @Module({
-  imports: [KbModule],
+  imports: [KnowledgeModule],
   providers: [OcrService],
   exports: [OcrService],
 })

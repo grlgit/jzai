@@ -31,6 +31,10 @@ const SHARED_TABLE_WHITELIST = new Set([
   'jz_kb_categories',
   'jz_panels',
   'jz_installed_apps',
+  // 知识库基础架构（T1 企业WIKI / T2 文档管理 / T3 项目管理 APP 只读访问）
+  'jz_kb_spaces',
+  'jz_kb_documents',
+  'jz_kb_document_references',
 ]);
 
 /** IDs of panels seeded by the platform (must not conflict) */
@@ -50,7 +54,7 @@ const REACT_INLINE_MARKERS = ['__SECRET_INTERNALS', 'react.production.min'];
 /** Backend dependency whitelist */
 const BACKEND_DEP_WHITELIST = new Set([
   '@nestjs/common', '@nestjs/core', 'rxjs', 'zod', 'yaml', 'dayjs', 'lodash',
-  'exceljs', 'pdf-lib', 'pdfjs-dist', 'dxf-parser', 'sharp',
+  'exceljs', 'pdf-lib', 'pdfjs-dist', 'dxf-parser', 'sharp', 'fflate',
 ]);
 
 /**

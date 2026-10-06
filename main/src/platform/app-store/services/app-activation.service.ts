@@ -27,6 +27,7 @@ import { AppConnectionBindingService } from './app-connection-binding.service';
 import { AppCredentialService } from './app-credential.service';
 import { ModelRouterService } from '../../../model-router/model-router.service';
 import { ToolBridgeService } from '../../../agent/tool-bridge/tool-bridge.service';
+import { SpacesService } from '../../../knowledge/spaces.service';
 
 export const APP_CONFIG_ARTIFACT_PERMISSION = 'APP_CONFIG_ARTIFACT_PERMISSION';
 
@@ -51,6 +52,7 @@ export class AppActivationService {
     private readonly capabilities: AppCapabilityService,
     private readonly logBuffer: AppLogService,
     private readonly appPlatform: AppPlatformService,
+    private readonly spaces: SpacesService,
   ) {}
 
   /** Activate all apps marked active in the registry. Called once at startup. */
@@ -101,6 +103,7 @@ export class AppActivationService {
   /** Register panels/agents/skills and load backend for a single app. */
   async activateApp(appId: string, installDir: string, manifest: AppManifest): Promise<void> {
     await this.ensureDatabasePool(appId, manifest);
+    await this.ensureKnowledgeSpaces(appId, manifest);
     await this.registerPanels(manifest, appId);
     await this.copyAgents(manifest, installDir);
     await this.copySkills(manifest, installDir);
@@ -108,6 +111,24 @@ export class AppActivationService {
     this.registerDelegations(manifest, appId);
     await this.recordCapabilities(appId, manifest);
     await this.loadBackend(appId, installDir, manifest);
+  }
+
+  /**
+   * APP 知识空间（T2/P2）：manifest.knowledge.spaces 声明的空间在激活时幂等创建。
+   * 安装/升级/重启恢复都经 activateApp，单点挂载即可全覆盖；卸载不删空间（数据保留）。
+   */
+  private async ensureKnowledgeSpaces(appId: string, manifest: AppManifest): Promise<void> {
+    const declared = manifest.knowledge?.spaces;
+    if (!declared?.length) return;
+    for (const s of declared) {
+      try {
+        const space = await this.spaces.ensureAppSpace(appId, s.name, s.slug);
+        this.logger.log(`Ensured knowledge space ${space.slug} for app ${appId}`);
+      } catch (err: any) {
+        this.logger.error(`Failed to ensure knowledge space for app ${appId}: ${err.message}`);
+        throw err;
+      }
+    }
   }
 
   /**
@@ -144,6 +165,8 @@ export class AppActivationService {
       });
 
       await this.capabilities.replaceForApp(appId, { tools, skills, agents });
+      // T2/P3：同步 agent→appId 归属，供工具链为 APP agent 注入 APP 身份
+      this.getAgentRegistry()?.setAgentOwnersForApp(appId, agents);
     } catch (err: any) {
       // 能力映射只影响列表徽章展示，不阻断激活
       this.logger.error(`Failed to record capabilities for app ${appId}: ${err.message}`);
@@ -199,6 +222,7 @@ export class AppActivationService {
    */
   async deactivateApp(appId: string, reason: AppDeactivateReason = 'uninstall'): Promise<void> {
     this.getToolRegistry()?.markDraining(appId);
+    this.getAgentRegistry()?.clearAgentOwnersForApp(appId);
     try {
       await this.loader.unload(appId, reason);
       this.getToolRegistry()?.unregister(appId);

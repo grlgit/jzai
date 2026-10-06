@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { AnalyticsService } from './analytics.service';
 import { AnalyticsController } from './analytics.controller';
-import { McpToolsModule } from '../../bridge/knowledge/mcp-tools.module';
+import { KnowledgeModule } from '../../knowledge/knowledge.module';
 
 @Module({
-  imports: [McpToolsModule],
+  imports: [KnowledgeModule],
   controllers: [AnalyticsController],
   providers: [AnalyticsService],
   exports: [AnalyticsService],

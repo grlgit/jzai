@@ -128,16 +128,14 @@ export class SetupService {
       result.db = { status: 'error', message: err.message };
     }
 
-    // KB check
-    const kbEndpoint = this.config.get('KB_MCP_ENDPOINT', 'http://localhost:3011');
-    const kbApiUrl = kbEndpoint.replace(':3011', ':8000');
+    // KB check（知识库已并入主台：检查企业空间是否就绪）
     try {
-      const resp = await fetch(`${kbApiUrl}/health`, {
-        signal: AbortSignal.timeout(5000),
-      });
-      result.kb = resp.ok ? { status: 'ok' } : { status: 'error', message: `HTTP ${resp.status}` };
+      const { rows } = await this.db.query(
+        "SELECT 1 FROM jz_kb_spaces WHERE slug = 'ent-default' LIMIT 1",
+      );
+      result.kb = rows.length > 0 ? { status: 'ok' } : { status: 'error', message: '企业空间未初始化' };
     } catch (err: any) {
-      result.kb = { status: 'error', message: '知库服务未连接' };
+      result.kb = { status: 'error', message: err.message };
     }
 
     // Local model (Ollama)

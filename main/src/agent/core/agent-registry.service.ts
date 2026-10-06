@@ -102,6 +102,26 @@ export class AgentRegistryService {
     return this.agents.get(id);
   }
 
+  // ── APP agent 归属（T2/P3）：agentId → owner appId，供工具链注入 APP 身份 ──
+  private readonly agentOwners = new Map<string, string>();
+
+  /** 幂等重建某 APP 的 agent 归属（激活/升级时调用） */
+  setAgentOwnersForApp(appId: string, agentIds: string[]): void {
+    this.clearAgentOwnersForApp(appId);
+    for (const id of agentIds) this.agentOwners.set(id, appId);
+  }
+
+  clearAgentOwnersForApp(appId: string): void {
+    for (const [id, owner] of [...this.agentOwners]) {
+      if (owner === appId) this.agentOwners.delete(id);
+    }
+  }
+
+  /** agent 的归属 APP（内置 agent 返回 undefined） */
+  getOwnerAppId(agentId: string): string | undefined {
+    return this.agentOwners.get(agentId);
+  }
+
   save(def: AgentDef) {
     const filePath = path.join(this.workspace.getAgentsDir(), `${def.id}.yaml`);
     const content = yaml.dump({ agent: {

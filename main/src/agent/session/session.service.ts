@@ -2,8 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DbService } from '../../db/db.service';
 import { ModelRouterService } from '../../model-router/model-router.service';
 import { WorkspaceService } from '../../workspace/workspace.service';
-import { KbService } from '../../bridge/knowledge/kb.service';
+import { SpacesService } from '../../knowledge/spaces.service';
+import { ChunkRepository } from '../../knowledge/shared/repository';
+import { chunkText } from '../../knowledge/shared/chunker';
 import { randomUUID } from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export interface Session {
   id: string;
@@ -32,7 +36,7 @@ export class SessionService {
     private readonly db: DbService,
     private readonly modelRouter: ModelRouterService,
     private readonly workspace: WorkspaceService,
-    private readonly kbService: KbService,
+    private readonly spaces: SpacesService,
   ) {}
 
   // ===== Session CRUD =====
@@ -351,20 +355,29 @@ ${conversationText}`,
 
       if (!extracted || extracted === '无' || extracted.length < 30) return;
 
-      // Save as personal knowledge via KB API
-      const kbListResult = await this.kbService.proxy('/v1/knowledge-bases', 'GET');
-      const kbs = Array.isArray(kbListResult.data) ? kbListResult.data : [];
-      const kb = kbs[0];
-      if (!kb) return;
+      // Save as personal knowledge（写入个人空间 raw/）
+      const space = await this.spaces.ensurePersonalSpace(userId);
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const title = `会话笔记 ${timestamp.slice(0, 10)}`;
+      const filename = `${timestamp}.md`;
+      const dirPath = '/raw/';
       const content = `---\ntitle: ${title}\ntags:\n  - auto-extracted\n  - personal\n---\n\n${extracted}`;
 
-      await this.kbService.proxy(
-        `/v1/knowledge-bases/${kb.id}/documents/note`, 'POST',
-        { filename: `${timestamp}.md`, path: `/wiki/_personal/${userId}/raw/`, content },
+      const relative = `raw/${filename}`;
+      const filePath = path.join(this.spaces.rootFor(space.slug), relative);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, content, 'utf-8');
+
+      const docId = randomUUID();
+      await this.db.query(
+        'INSERT INTO jz_kb_documents ' +
+          '(id, owner_user_id, filename, title, path, relative_path, source_kind, ' +
+          "file_type, status, content, tags, version, space_id) " +
+          "VALUES ($1, $2, $3, $4, $5, $6, 'source', 'md', 'ready', $7, $8, 0, $9)",
+        [docId, userId, filename, title, dirPath, relative, content, ['auto-extracted', 'personal'], space.id],
       );
+      await new ChunkRepository(this.db).storeChunks(docId, chunkText(content));
 
       this.logger.log(`Extracted knowledge from session ${sessionId.slice(0, 8)} for user ${userId}`);
     } catch (err: any) {

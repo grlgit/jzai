@@ -3,7 +3,7 @@ import { SessionService } from './session.service';
 import { DbService } from '../../db/db.service';
 import { ModelRouterService } from '../../model-router/model-router.service';
 import { WorkspaceService } from '../../workspace/workspace.service';
-import { KbService } from '../../bridge/knowledge/kb.service';
+import { SpacesService } from '../../knowledge/spaces.service';
 
 describe('SessionService', () => {
   let service: SessionService;
@@ -34,7 +34,7 @@ describe('SessionService', () => {
         { provide: DbService, useValue: mockDb },
         { provide: ModelRouterService, useValue: {} },
         { provide: WorkspaceService, useValue: {} },
-        { provide: KbService, useValue: {} },
+        { provide: SpacesService, useValue: {} },
       ],
     }).compile();
 

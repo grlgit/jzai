@@ -21,7 +21,7 @@ import { CoWorkerAnalyticsService } from './coworker-analytics.service';
 import { CoWorkerPostMeetingService } from './coworker-post-meeting.service';
 import { UserService, Permission } from '../../user/user.service';
 import { DbService } from '../../db/db.service';
-import { McpToolsService } from '../knowledge/mcp-tools.service';
+import { KnowledgeToolsService } from '../../knowledge/tools/knowledge-tools.service';
 import { SkillRegistryService } from '../../capability/skill/skill-registry.service';
 import { CoWorkerAppService } from './coworker-app.service';
 import { CoWorkerWinBuildService } from './coworker-win-build.service';
@@ -48,7 +48,7 @@ export class CoWorkerController {
     private readonly cwWinBuild: CoWorkerWinBuildService,
     private readonly userService: UserService,
     private readonly db: DbService,
-    private readonly mcpTools: McpToolsService,
+    private readonly mcpTools: KnowledgeToolsService,
     private readonly skillRegistry: SkillRegistryService,
     private readonly toolBridge: ToolBridgeService,
     private readonly mcpRegistry: McpRegistryService,

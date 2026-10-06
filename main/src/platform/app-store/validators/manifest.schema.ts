@@ -118,6 +118,8 @@ export const AppManifestSchema = z.object({
   description: i18nStringSchema.optional(),
   author: z.string().optional(),
   license: z.string().optional(),
+  /** 需要订阅 License 才能运行（无有效 License 安装后进入 license_expired 状态） */
+  requiresLicense: z.boolean().optional(),
   icon: z.string().optional(),
   tags: z.array(z.string()).optional(),
   engines: z
@@ -178,6 +180,24 @@ export const AppManifestSchema = z.object({
   agentDelegation: z.array(agentDelegationSchema).optional(),
   /** 伴随服务声明（PLAT-016） */
   services: z.array(companionServiceSchema).optional(),
+  /**
+   * APP 知识空间声明（T2）：安装/激活时按声明创建 APP 空间（ensureAppSpace）。
+   * 空数组或缺省字段 = 不声明（不建）；声明 [{}] = 单空间 app-{appId}；
+   * 带 slug = app-{appId}-{slug} 多空间。
+   */
+  knowledge: z
+    .object({
+      spaces: z.array(
+        z.object({
+          slug: z
+            .string()
+            .regex(/^[a-z][a-z0-9-]{0,31}$/)
+            .optional(),
+          name: z.string().optional(),
+        }),
+      ),
+    })
+    .optional(),
 });
 
 export type AppManifest = z.infer<typeof AppManifestSchema>;

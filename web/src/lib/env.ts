@@ -12,12 +12,13 @@ export function getMainUrl(): string {
 }
 
 /**
- * Get the KB API base URL for direct access (TUS upload, file download).
+ * Get the KB API base URL for direct access (file download).
  *
- * Browser: returns '/kb-api' (proxied by Next.js rewrites).
- * SSR: returns the actual KB URL.
+ * Browser: returns '/kb-api' (proxied by Next.js rewrites to 主台 /api/kb)。
+ * SSR: returns the main backend KB API URL（kbs 已并入主台）。
  */
 export function getKbDirectUrl(): string {
   if (typeof window !== 'undefined') return '/kb-api';
-  return process.env.KB_API_URL || 'http://localhost:8000';
+  const mainUrl = process.env.MAIN_BACKEND_URL || 'http://localhost:1111';
+  return `${mainUrl}/api/kb`;
 }

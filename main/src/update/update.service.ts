@@ -516,16 +516,10 @@ export class UpdateService {
     this.logger.log('[deps] 联网补装完成，校验通过');
   }
 
-  private async upgradeKb(tarPath: string): Promise<void> {
-    const kbEndpoint = this.config.get('KB_API_URL', 'http://kb:8000');
-    const fileData = fs.readFileSync(tarPath);
-    const formData = new FormData();
-    formData.append('file', new Blob([fileData]), 'kb.tar.gz');
-    const resp = await fetch(`${kbEndpoint}/upgrade`, { method: 'POST', body: formData, signal: AbortSignal.timeout(60000) });
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`KB upgrade failed: ${resp.status} ${text}`);
-    }
+  private async upgradeKb(_tarPath: string): Promise<void> {
+    // kbs 已并入主台（T0 重构）：不再有独立的 KB 服务升级通道，
+    // 知识库随主台升级包一并更新。保留空实现以兼容旧升级包结构。
+    this.logger.log('[kb] kbs 已并入主台，跳过独立 KB 升级步骤');
   }
 
   private async upgradeCoWorkerApp(tarPath: string): Promise<void> {

@@ -5,7 +5,7 @@ import type { AgentEvent as PiAgentEvent } from '../../pi';
 import { AgentRegistryService, AgentDef } from './agent-registry.service';
 import { ModelRouterService } from '../../model-router/model-router.service';
 import { EditionService } from '../../edition/edition.service';
-import { McpToolsService } from '../../bridge/knowledge/mcp-tools.service';
+import { KnowledgeToolsService } from '../../knowledge/tools/knowledge-tools.service';
 import { DistillService } from '../../bridge/knowledge/distill/distill.service';
 import { AgentPoolService } from './agent-pool.service';
 import { ToolBuilderService } from './tool-builder.service';
@@ -152,7 +152,7 @@ export class DynamicAgentService implements OnModuleInit {
   constructor(
     private readonly registry: AgentRegistryService,
     private readonly modelRouter: ModelRouterService,
-    private readonly mcpTools: McpToolsService,
+    private readonly mcpTools: KnowledgeToolsService,
     private readonly agentPool: AgentPoolService,
     private readonly toolBuilder: ToolBuilderService,
     private readonly toolBridge: ToolBridgeService,
@@ -805,7 +805,7 @@ export class DynamicAgentService implements OnModuleInit {
     const model = this.modelRouter.resolveModelForLevel(def.modelLevel);
     const tools = await this.toolBridge.buildForAgent(
       def.tools,
-      { principal, userId, agentKey: key, userEmail },
+      { principal, userId, agentKey: key, userEmail, appId: this.registry.getOwnerAppId(def.id) },
       def.context?.maxToolOutputChars,
     );
 

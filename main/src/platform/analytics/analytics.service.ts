@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { DbService } from '../../db/db.service';
-import { McpToolsService } from '../../bridge/knowledge/mcp-tools.service';
+import { KnowledgeToolsService } from '../../knowledge/tools/knowledge-tools.service';
+import { SpacesService, ENTERPRISE_SPACE_SLUG } from '../../knowledge/spaces.service';
 
 @Injectable()
 export class AnalyticsService implements OnModuleInit {
@@ -9,7 +10,8 @@ export class AnalyticsService implements OnModuleInit {
 
   constructor(
     private readonly db: DbService,
-    private readonly mcpTools: McpToolsService,
+    private readonly mcpTools: KnowledgeToolsService,
+    private readonly spaces: SpacesService,
   ) {}
 
   onModuleInit() {
@@ -341,25 +343,16 @@ export class AnalyticsService implements OnModuleInit {
     };
   }
   async getKnowledgeHealth(): Promise<Record<string, any>> {
-    const connected = this.mcpTools.isAvailable();
-    if (!connected) {
-      return { connected: false, status: 'offline' };
-    }
-
-    // Query llm_wiki API for document stats
+    // 知识库已并入主台：直接查询 DB（企业空间）
     try {
-      const apiEndpoint = this.mcpTools['appConfig']?.get('knowledgeBase.apiEndpoint', 'http://localhost:8000') || 'http://localhost:8000';
-      const resp = await fetch(`${apiEndpoint}/v1/knowledge-bases`, { signal: AbortSignal.timeout(5000) });
-      if (!resp.ok) return { connected: true, status: 'error', detail: `API returned ${resp.status}` };
+      const space = await this.spaces.resolve(ENTERPRISE_SPACE_SLUG);
+      if (!space) return { connected: true, status: 'empty', documents: 0 };
 
-      const kbs = await resp.json();
-      const kb = kbs[0];
-      if (!kb) return { connected: true, status: 'empty', documents: 0 };
+      const { rows: docs } = await this.db.query(
+        'SELECT status, path, content FROM jz_kb_documents WHERE space_id = $1',
+        [space.id],
+      );
 
-      const docsResp = await fetch(`${apiEndpoint}/v1/knowledge-bases/${kb.id}/documents`, { signal: AbortSignal.timeout(10000) });
-      if (!docsResp.ok) return { connected: true, status: 'error' };
-
-      const docs = await docsResp.json();
       const byStatus: Record<string, number> = {};
       for (const d of docs) {
         byStatus[d.status] = (byStatus[d.status] || 0) + 1;

@@ -35,6 +35,8 @@ export interface ToolContext {
   userId?: string;
   agentKey?: string;
   userEmail?: string;
+  /** 运行中的 agent 归属的 APP（T2/P3 由 AgentRegistry 归属表注入；内置 agent 为空） */
+  appId?: string;
   piAi?: any;
   connections?: AppConnectionClient;
 }

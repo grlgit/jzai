@@ -1,13 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ModelRouterModule } from '../model-router/model-router.module';
-import { McpToolsModule } from '../bridge/knowledge/mcp-tools.module';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { AnalyticsModule } from '../platform/analytics/analytics.module';
 import { AutomationModule } from '../capability/automation/automation.module';
 import { UserModule } from '../user/user.module';
 import { SkillModule } from '../capability/skill/skill.module';
 import { ConnectorModule } from '../capability/connector/connector.module';
 import { OcrModule } from '../data/media/ocr.module';
-import { KbModule } from '../bridge/knowledge/kb.module';
 import { EditionModule } from '../edition/edition.module';
 import { DashboardModule } from '../data/dashboard/dashboard.module';
 import { OemModule } from '../platform/oem/oem.module';
@@ -51,7 +50,7 @@ import { DatabaseToolProvider } from '../data/database/database.tools';
 import { DashboardToolProvider } from '../data/dashboard/dashboard.tools';
 import { ExcelToolProvider } from '../data/excel/excel.tools';
 import { PdfToolProvider } from '../data/pdf/pdf.tools';
-import { KnowledgeToolProvider } from '../bridge/knowledge/knowledge.tools';
+import { KnowledgeToolProvider } from '../capability/builtin/knowledge-base.tools';
 import { DistillToolProvider } from '../bridge/knowledge/distill/distill.tools';
 import { EmailToolProvider } from '../platform/email/email.tools';
 // Panel message registry
@@ -66,8 +65,8 @@ import { PanelController } from './panel/panel.controller';
 @Module({
   imports: [
     // Platform infrastructure
-    ModelRouterModule, McpToolsModule, AnalyticsModule, AutomationModule,
-    UserModule, SkillModule, ConnectorModule, OcrModule, KbModule,
+    ModelRouterModule, KnowledgeModule, AnalyticsModule, AutomationModule,
+    UserModule, SkillModule, ConnectorModule, OcrModule,
     EditionModule, DashboardModule, OemModule, EmailModule,
     // Shared support services
     ChatSupportModule,

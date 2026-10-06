@@ -52,6 +52,7 @@ export class AppAssetService {
     const ext = path.extname(name).toLowerCase();
     const map: Record<string, string> = {
       '.js': 'application/javascript',
+      '.mjs': 'application/javascript',
       '.css': 'text/css',
       '.html': 'text/html',
       '.svg': 'image/svg+xml',

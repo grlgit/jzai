@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect, useRef, startTransition } from 'react';
 import Sidebar from '@/components/Sidebar';
-import KBPanel from '@/modules/kb/KBPanel';
 import ChatInput from '@/components/ChatInput';
 import ChatMessages from '@/components/ChatMessages';
 import ContextIndicator from '@/components/ContextIndicator';
@@ -720,7 +719,6 @@ export default function Home() {
             </div>
             <div className="flex-1 overflow-hidden relative min-h-0">
               {visitedPanels.has('cfg') && <div className={contentPanel.type === 'cfg' ? 'h-full' : 'hidden'}><SettingsPanel /></div>}
-              {visitedPanels.has('kb') && <div className={contentPanel.type === 'kb' ? 'h-full' : 'hidden'}><KBPanel /></div>}
               {visitedPanels.has('cw') && <div className={contentPanel.type === 'cw' ? 'h-full' : 'hidden'}><CoWorkerPanel /></div>}
               {visitedPanels.has('skills') && <div className={contentPanel.type === 'skills' ? 'h-full' : 'hidden'}><SkillsManagePanel messages={messages} onOpenSession={(_skillName, sid, agentType) => {
                 setActiveAgent(agentType);

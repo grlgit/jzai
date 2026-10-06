@@ -8,7 +8,7 @@ import { DbModule } from '../../db/db.module';
 import { UserModule } from '../../user/user.module';
 import { ModelRouterModule } from '../../model-router/model-router.module';
 import { WorkspaceModule } from '../../workspace/workspace.module';
-import { KbModule } from '../../bridge/knowledge/kb.module';
+import { KnowledgeModule } from '../../knowledge/knowledge.module';
 
 /**
  * ChatSupportModule — exports shared support services that other domains need.
@@ -16,7 +16,7 @@ import { KbModule } from '../../bridge/knowledge/kb.module';
  * but ChatModule imports CapabilityModule.
  */
 @Module({
-  imports: [DbModule, UserModule, ModelRouterModule, WorkspaceModule, KbModule],
+  imports: [DbModule, UserModule, ModelRouterModule, WorkspaceModule, KnowledgeModule],
   providers: [AgentPoolService, SessionService, ConfirmationBridgeService, ContextManagerService, AgentRegistryService],
   exports: [AgentPoolService, SessionService, ConfirmationBridgeService, ContextManagerService, AgentRegistryService],
 })

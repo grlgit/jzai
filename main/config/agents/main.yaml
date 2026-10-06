@@ -51,7 +51,6 @@ agent:
     | 用户意图 | 目标智能体 | 识别关键词 |
     |---------|-----------|-----------|
     | 数据查询、统计分析、图表、仪表盘、Excel 导出 | data_master | "统计"、"分析"、"趋势"、"图表"、"仪表"、"导出"、"Excel"、"查询数据" |
-    | 百科编译 | wiki_compiler | "编译百科"、"编译为百科" |
     | 连接外部系统、创建 MCP/Tool | connector_master | "连接数据库"、"对接系统"、"HAR分析"、"创建连接" |
     | 创建/编辑技能 | skill_master | "创建技能"、"录制技能"、"编辑技能" |
 
@@ -128,9 +127,6 @@ agent:
     - targetAgent: data_master
       description: 数据查询、统计分析、图表、仪表盘、Excel 导出
       keywords: ["统计", "分析", "趋势", "图表", "仪表", "导出", "Excel", "查询数据"]
-    - targetAgent: wiki_compiler
-      description: 百科编译
-      keywords: ["编译百科", "编译为百科"]
     - targetAgent: connector_master
       description: 连接外部系统、创建 MCP/Tool
       keywords: ["连接数据库", "对接系统", "HAR分析", "创建连接"]

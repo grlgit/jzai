@@ -2,8 +2,11 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { WorkspaceService } from '../../workspace/workspace.service';
-import { KbService } from '../../bridge/knowledge/kb.service';
+import { DbService } from '../../db/db.service';
+import { SpacesService, ENTERPRISE_SPACE_SLUG } from '../../knowledge/spaces.service';
+import { ProcessorService } from '../../knowledge/processor/processor.service';
 
 /**
  * OCR extraction result: per-page markdown content
@@ -38,7 +41,9 @@ export class OcrService {
   constructor(
     private readonly config: ConfigService,
     private readonly workspace: WorkspaceService,
-    private readonly kbService: KbService,
+    private readonly db: DbService,
+    private readonly spaces: SpacesService,
+    private readonly processor: ProcessorService,
   ) {
     this.mistralApiKey = this.config.get('MISTRAL_API_KEY', '');
   }
@@ -206,83 +211,61 @@ export class OcrService {
     throw lastError || new Error('Mistral OCR failed after retries');
   }
 
-  // ── llm_wiki opendataloader proxy ─────────────────────────────────────
+  // ── 知识库文档处理管线（原 llm_wiki opendataloader 代理，kbs 并入后内部直连）──
 
   private async extractViaLlmWiki(filePath: string): Promise<OcrResult> {
-    const { apiEndpoint } = this.kbService.getConfig();
-
-    // Upload file to llm_wiki for processing
-    const fileBuffer = fs.readFileSync(filePath);
     const fileName = path.basename(filePath);
+    const space = await this.spaces.resolve(ENTERPRISE_SPACE_SLUG);
+    if (!space) throw new Error('企业空间未初始化');
 
-    const formData = new FormData();
-    formData.append('file', new Blob([fileBuffer]), fileName);
-    formData.append('path', `_ocr_tmp/${fileName}`);
+    // 复制到企业空间 _ocr_tmp/ 并建档
+    const relative = `_ocr_tmp/${Date.now()}_${fileName}`;
+    const dest = path.join(this.spaces.rootFor(space.slug), relative);
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(filePath, dest);
 
-    const uploadResp = await fetch(`${apiEndpoint}/v1/upload`, {
-      method: 'POST',
-      body: formData,
-      signal: AbortSignal.timeout(60000),
-    });
+    const ext = fileName.includes('.') ? fileName.split('.').pop()!.toLowerCase() : '';
+    const docId = crypto.randomUUID();
+    await this.db.query(
+      'INSERT INTO jz_kb_documents (id, filename, title, path, relative_path, source_kind, ' +
+        "file_type, file_size, status, space_id) " +
+        "VALUES ($1, $2, $3, '/_ocr_tmp/', $4, 'source', $5, $6, 'pending', $7)",
+      [docId, fileName, fileName, relative, ext || 'bin', fs.statSync(dest).size, space.id],
+    );
 
-    if (!uploadResp.ok) {
-      throw new Error(`llm_wiki upload failed: ${uploadResp.status}`);
-    }
+    try {
+      // 同步走文档处理管线
+      await this.processor.processNow(docId);
 
-    const uploadData = await uploadResp.json();
-    const docId = uploadData.id;
-
-    if (!docId) {
-      throw new Error('llm_wiki upload returned no document ID');
-    }
-
-    // Wait for processing to complete (poll status)
-    let retries = 0;
-    const maxRetries = 60; // 60 * 2s = 120s max
-    while (retries < maxRetries) {
-      const statusResp = await fetch(`${apiEndpoint}/v1/documents/${docId}`, {
-        signal: AbortSignal.timeout(10000),
-      });
-      if (statusResp.ok) {
-        const doc = await statusResp.json();
-        if (doc.status === 'ready') {
-          // Fetch content
-          const contentResp = await fetch(`${apiEndpoint}/v1/documents/${docId}/content`, {
-            signal: AbortSignal.timeout(30000),
-          });
-          if (contentResp.ok) {
-            const contentData = await contentResp.json();
-            const pages: OcrPage[] = (contentData.pages || []).map((p: any) => ({
-              page: p.page || 1,
-              content: p.content || '',
-            }));
-            const fullText = pages.length > 0
-              ? pages.map(p => p.content).join('\n\n---\n\n')
-              : contentData.content || '';
-
-            // Cleanup: delete temp document
-            fetch(`${apiEndpoint}/v1/documents/${docId}`, { method: 'DELETE' }).catch(() => {});
-
-            return {
-              pages: pages.length > 0 ? pages : [{ page: 1, content: fullText }],
-              fullText,
-              pageCount: pages.length || 1,
-              parser: doc.parser || 'opendataloader',
-            };
-          }
-        } else if (doc.status === 'failed') {
-          // Cleanup
-          fetch(`${apiEndpoint}/v1/documents/${docId}`, { method: 'DELETE' }).catch(() => {});
-          throw new Error(`llm_wiki processing failed: ${doc.error_message || 'unknown error'}`);
-        }
+      const { rows } = await this.db.query(
+        'SELECT status, content, page_count, parser, error_message FROM jz_kb_documents WHERE id = $1',
+        [docId],
+      );
+      const doc = rows[0];
+      if (!doc || doc.status === 'failed') {
+        throw new Error(`文档处理失败: ${doc?.error_message || 'unknown error'}`);
       }
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      retries++;
-    }
 
-    // Cleanup on timeout
-    fetch(`${apiEndpoint}/v1/documents/${docId}`, { method: 'DELETE' }).catch(() => {});
-    throw new Error('llm_wiki document processing timed out');
+      const { rows: pageRows } = await this.db.query(
+        'SELECT page, content FROM jz_kb_document_pages WHERE document_id = $1 ORDER BY page',
+        [docId],
+      );
+      const pages: OcrPage[] = pageRows.map((p: any) => ({ page: p.page || 1, content: p.content || '' }));
+      const fullText = pages.length > 0
+        ? pages.map(p => p.content).join('\n\n---\n\n')
+        : doc.content || '';
+
+      return {
+        pages: pages.length > 0 ? pages : [{ page: 1, content: fullText }],
+        fullText,
+        pageCount: doc.page_count || pages.length || 1,
+        parser: doc.parser || 'processor',
+      };
+    } finally {
+      // Cleanup: 删除临时文档与文件
+      await this.db.query('DELETE FROM jz_kb_documents WHERE id = $1', [docId]).catch(() => {});
+      fs.unlinkSync(dest);
+    }
   }
 
   // ── pdfjs / pdf-parse fallback ──────────────────────────────────────

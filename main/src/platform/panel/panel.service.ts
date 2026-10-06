@@ -4,7 +4,6 @@ import { WorkspaceService } from '../../workspace/workspace.service';
 import * as fs from 'fs';
 
 const SEED_PANELS = [
-  { id: 'kb',            name: '企业心智',  icon: 'img:/icons/knowledge.svg',   permission: 'kb:read',        isBuiltin: false, sortOrder: 1, category: 'builtin', agentId: null },
   { id: 'cw',            name: 'AI员工',    icon: 'img:/icons/coworker.svg',    permission: 'cw:view',        isBuiltin: false, sortOrder: 2, category: 'builtin', agentId: null },
   { id: 'dashboard',     name: '数据仪表',  icon: 'img:/icons/dashboard.svg',   permission: null,             isBuiltin: false, sortOrder: 3, category: 'builtin', agentId: 'data_master' },
   { id: 'skills',        name: '技能',      icon: 'img:/icons/skills.svg',      permission: 'cfg:automation', isBuiltin: false, sortOrder: 5, category: 'builtin', agentId: 'skill_master' },
@@ -70,9 +69,9 @@ export class PanelService implements OnModuleInit {
         [p.id, p.name, p.icon, p.permission, p.isBuiltin, p.sortOrder, p.category, p.agentId],
       );
     }
-    // Remove deprecated panels
-    await this.db.query(`DELETE FROM jz_panels WHERE id IN ('dash', 'distill', 'users')`).catch(() => {});
-    await this.db.query(`DELETE FROM jz_user_sidebar WHERE panel_id IN ('distill', 'users')`).catch(() => {});
+    // Remove deprecated panels（kb：企业心智入口已迁入企业WIKI APP，U10）
+    await this.db.query(`DELETE FROM jz_panels WHERE id IN ('dash', 'distill', 'users', 'kb')`).catch(() => {});
+    await this.db.query(`DELETE FROM jz_user_sidebar WHERE panel_id IN ('distill', 'users', 'kb')`).catch(() => {});
     this.logger.log(`Seeded ${SEED_PANELS.length} panels`);
   }
 

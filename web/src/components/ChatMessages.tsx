@@ -8,10 +8,25 @@ import { useMessageDisplay } from '@/hooks/useMessageDisplay';
 import type { ChatMessage, PendingConfirm } from '@/hooks/useChat';
 import ConfirmFormCard from '@/components/ConfirmFormDialog';
 import InlineChart from '@/components/dashboard/InlineChart';
-import { apiFetch } from '@/modules/kb/lib/api';
-
 import { getMainUrl } from '@/lib/env';
 const MAIN_URL = getMainUrl();
+
+// 「保存到知识库」专用：原 @/modules/kb/lib/api 的 apiFetch（kb 模块已迁入企业WIKI APP）
+async function apiFetch<T>(path: string, _token?: string, options?: RequestInit): Promise<T> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('jz_token') || '' : '';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string>),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${MAIN_URL}/api/kb${path}`, { ...options, headers });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || `API error: ${res.status}`);
+  }
+  if (res.status === 204) return undefined as T;
+  return res.json();
+}
 
 function authHeaders(): Record<string, string> {
   const token = typeof window !== 'undefined' ? localStorage.getItem('jz_token') : null;

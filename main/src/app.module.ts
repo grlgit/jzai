@@ -33,8 +33,7 @@ import { DashboardModule } from './data/dashboard/dashboard.module';
 import { OcrModule } from './data/media/ocr.module';
 
 // Bridge domain
-import { KbModule } from './bridge/knowledge/kb.module';
-import { McpToolsModule } from './bridge/knowledge/mcp-tools.module';
+import { KnowledgeModule } from './knowledge/knowledge.module';
 import { CoWorkerModule } from './bridge/coworker/coworker.module';
 
 import { JwtAuthGuard } from './platform/auth/jwt-auth.guard';
@@ -57,7 +56,7 @@ import { AppBootstrapService } from './app-bootstrap.service';
     // Data
     DashboardModule, OcrModule,
     // Bridge
-    KbModule, McpToolsModule, CoWorkerModule,
+    KnowledgeModule, CoWorkerModule,
   ],
   providers: [
     AppBootstrapService,
