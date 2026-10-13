@@ -2,6 +2,7 @@ import { Injectable, Logger, Inject, Optional, forwardRef } from '@nestjs/common
 import { ConfigService } from '@nestjs/config';
 import * as fs from 'fs';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import { EditionService } from '../edition/edition.service';
 
 export interface VersionInfo {
@@ -305,6 +306,7 @@ export class UpdateService {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       this.progress.phase = 'restarting';
       this.logger.log(`Update to ${version} applied (delta=${!!delta}, git=${(update.gitCommit || '').slice(0, 9)}), restarting...`);
+      this.restartIfNative(appDir);
       setTimeout(() => process.exit(0), 2000);
 
     } catch (err: any) {
@@ -313,6 +315,37 @@ export class UpdateService {
       this.progress.phase = 'error';
       this.progress.error = err.message;
       fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * 原生部署（start.sh 形态）的 OTA 自重启：
+   * 检测 <appDir>/run/*.pid 存在即为原生布局——spawn 独立 restarter 进程，
+   * 由它杀 web/gateway、等本进程退出后按 start.sh 语义拉起 main/web/gateway。
+   * Docker 形态无 run/*.pid（容器入口 wait -n 整组重启），直接跳过。
+   * 修复：原生 OTA 只退出 main 导致 web 旧进程引用已删除 chunk（404 白屏）且 main 无人拉起。
+   */
+  private restartIfNative(appDir: string): void {
+    const runDir = path.join(appDir, 'run');
+    const nativeLayout = fs.existsSync(path.join(runDir, 'web.pid'))
+      || fs.existsSync(path.join(runDir, 'gateway.pid'));
+    if (!nativeLayout) return;
+    try {
+      const restarter = path.join(appDir, 'main', 'dist', 'update', 'native-restarter.js');
+      if (!fs.existsSync(restarter)) {
+        this.logger.warn(`[OTA] native restarter 缺失: ${restarter}（请手动 bash stop.sh && bash start.sh）`);
+        return;
+      }
+      const out = fs.openSync(path.join(runDir, 'restart.log'), 'a');
+      const child = spawn(process.execPath, [restarter, appDir, String(process.pid)], {
+        detached: true,
+        windowsHide: true,
+        stdio: ['ignore', out, out],
+      });
+      child.unref();
+      this.logger.log(`[OTA] 原生布局，restarter 已接管重启 (pid ${child.pid})`);
+    } catch (err: any) {
+      this.logger.warn(`[OTA] restarter 启动失败: ${err.message}（请手动 bash stop.sh && bash start.sh）`);
     }
   }
 
@@ -428,6 +461,7 @@ export class UpdateService {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       this.progress.phase = 'restarting';
       this.logger.log(`Upgrade to ${upgradePath.latest} completed (${upgradePath.steps.length} steps applied), restarting...`);
+      this.restartIfNative(appDir);
       setTimeout(() => process.exit(0), 2000);
 
     } catch (err: any) {

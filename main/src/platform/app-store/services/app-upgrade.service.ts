@@ -17,6 +17,13 @@ import { FIRST_PARTY_APP_ID } from './app-platform.service';
 import { copyDirCompat } from './app-install.service';
 import { emitAppUpdated } from '../runtime/app-events';
 
+/** 商城升级进度回调（可选）：百分比区间承接 downloading（0-45）之后的 45-95 */
+export type AppUpgradeProgressReporter = (
+  phase: 'unpacking' | 'validating' | 'installing' | 'migrating' | 'activating',
+  percent: number,
+  message: string,
+) => void;
+
 @Injectable()
 export class AppUpgradeService {
   private readonly logger = new Logger(AppUpgradeService.name);
@@ -33,13 +40,15 @@ export class AppUpgradeService {
     private readonly appLicenses: AppLicenseService,
   ) {}
 
-  async upgrade(appId: string, packagePath: string): Promise<void> {
+  async upgrade(appId: string, packagePath: string, reportProgress?: AppUpgradeProgressReporter): Promise<void> {
     const existing = await this.registry.findOne(appId);
     if (!existing) throw new NotFoundException(`App ${appId} not found`);
 
+    reportProgress?.('unpacking', 45, '正在解包应用包…');
     const packageSha256 = await this.signatures.hashFile(packagePath);
     const extractDir = await this.extractToTemp(packagePath);
     try {
+      reportProgress?.('validating', 55, '正在校验应用包…');
       // Validate new package without treating the currently installed release as another app.
       const ids = await this.registry.getExistingIds();
       ids.appIds.delete(appId);
@@ -103,6 +112,7 @@ export class AppUpgradeService {
 
       try {
         // 1. Deactivate old backend (draining + onDeactivate) and remove old workspace artifacts
+        reportProgress?.('installing', 65, '正在停用旧版本…');
         await this.activation.deactivateApp(appId, 'upgrade');
         await this.activation.removePanels(appId);
         if (existing.manifest) {
@@ -111,6 +121,7 @@ export class AppUpgradeService {
         }
 
         // 2. Stage new version into its own immutable directory
+        reportProgress?.('installing', 72, '正在写入新版本…');
         fs.mkdirSync(newDir, { recursive: true });
         copyDirCompat(extractDir, newDir);
 
@@ -118,12 +129,14 @@ export class AppUpgradeService {
         if (manifest.database && this.pools.hasPool(appId)) {
           const plan = await this.migrations.plan(appId, manifest, newDir);
           if (plan.toRun.length > 0) {
+            reportProgress?.('migrating', 80, '正在执行应用数据库迁移…');
             await this.migrations.up(appId, plan, newDir);
             migrated = true;
           }
         }
 
         // 4. Register new panels, agents, skills and load new backend
+        reportProgress?.('activating', 90, '正在激活新版本…');
         await this.activation.activateApp(appId, newDir, manifest);
 
         // 5. 全部成功后最后切换 active 指针

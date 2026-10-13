@@ -48,6 +48,12 @@ const FORBIDDEN_MODULES = ['child_process', 'worker_threads', 'vm', 'cluster', '
 /** Known heterogeneous framework markers */
 const HETERO_FRAMEWORKS = ['vue', '@angular/', 'svelte', 'solid-js'];
 
+/**
+ * vue 打包痕迹的精确检测：esbuild 压缩产物常出现 `vue=x()` 形式的局部变量名，
+ * 朴素子串匹配会把正常 React 包误判为 Vue 包，故只认真实 Vue 痕迹。
+ */
+const VUE_BUNDLED_RE = /__VUE__|__vue__|vue\.esm|vue\.runtime|from\s*['"]vue['"]|require\(\s*['"]vue['"]\)/;
+
 /** React bundle inline markers */
 const REACT_INLINE_MARKERS = ['__SECRET_INTERNALS', 'react.production.min'];
 
@@ -321,7 +327,9 @@ export class AppValidatorService {
     for (const file of allJsFiles) {
       const content = fs.readFileSync(file, 'utf-8');
       for (const fw of HETERO_FRAMEWORKS) {
-        if (content.includes(fw)) {
+        // vue 用精确检测（防压缩标识符误判），其余框架标记用子串
+        const hit = fw === 'vue' ? VUE_BUNDLED_RE.test(content) : content.includes(fw);
+        if (hit) {
           check(9, 'critical', 'HETERO_FRAMEWORK_BUNDLED',
             `File ${path.relative(extractDir, file)} appears to bundle "${fw}"`);
           break;

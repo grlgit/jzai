@@ -1,10 +1,20 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import { useI18n, LOCALES } from '@/i18n';
 
 interface LoginPageProps {
   onLogin: (email: string, password: string) => Promise<string | null>;
+}
+
+/** 现代 CSS 基线检测：oklch 颜色支持 ≈ Tailwind v4 基线（Chrome/Edge 111+、Safari 16.4+）。
+ *  低于此基线的内核（如旧版华为浏览器）无法解析 @layer/oklch，工具类整体失效。 */
+function detectModernCss(): boolean {
+  try {
+    return typeof CSS !== 'undefined' && CSS.supports('color', 'oklch(69% 0.1 200)');
+  } catch {
+    return false;
+  }
 }
 
 export default function LoginPage({ onLogin }: LoginPageProps) {
@@ -14,6 +24,11 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPwd, setShowPwd] = useState(false);
+  const [outdatedBrowser, setOutdatedBrowser] = useState(false);
+
+  useEffect(() => {
+    if (!detectModernCss()) setOutdatedBrowser(true);
+  }, []);
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -27,6 +42,18 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
   return (
     <div className="h-full flex bg-white">
+      {/* 过旧浏览器警告：必须用内联样式——老内核上 Tailwind 工具类已整体失效，横幅自身不能依赖它们 */}
+      {outdatedBrowser && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, zIndex: 9999,
+          background: '#b45309', color: '#fff', padding: '10px 16px',
+          fontSize: 13, lineHeight: 1.6, textAlign: 'center',
+        }}>
+          {locale === 'en'
+            ? 'Your browser is outdated and this page may not render correctly. Please upgrade, or use Chrome / Edge 111+ or Safari 16.4+.'
+            : '当前浏览器版本过低，页面样式可能无法正常显示。请升级浏览器，或使用 Chrome / Edge 111+、Safari 16.4+ 访问。'}
+        </div>
+      )}
       {/* Left: Brand Poster */}
       <div className="hidden lg:flex lg:w-[56%] relative overflow-hidden">
         {/* Gradient background */}

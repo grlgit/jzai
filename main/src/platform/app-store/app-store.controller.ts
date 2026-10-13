@@ -12,7 +12,6 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
-import { spawn } from 'child_process';
 import { AppRegistryService } from './services/app-registry.service';
 import { AppInstallService, ORPHANED_DATABASE_RESOURCES_ERROR } from './services/app-install.service';
 import { APP_CONFIG_ARTIFACT_PERMISSION, AppActivationService } from './services/app-activation.service';
@@ -114,21 +113,6 @@ export class AppStoreController {
     } catch {
       return null;
     }
-  }
-
-  /**
-   * SDK download — bundled at build time into dist/assets/sdk (nest assets).
-   * Always matches the running instance's version; JWT login is the only credential needed.
-   */
-  @Get('sdk.tgz')
-  downloadSdk(@Res() res: Response) {
-    const sdkDir = path.join(__dirname, '..', '..', 'assets', 'sdk');
-    if (!fs.existsSync(sdkDir)) throw new NotFoundException('SDK not bundled with this build');
-    res.setHeader('Content-Type', 'application/gzip');
-    res.setHeader('Content-Disposition', 'attachment; filename="jz-sdk.tgz"');
-    const tar = spawn('tar', ['-czf', '-', '-C', path.dirname(sdkDir), 'sdk']);
-    tar.stdout.pipe(res);
-    tar.stderr.on('data', (d: Buffer) => this.logger.warn(`sdk.tgz: ${d.toString().trim()}`));
   }
 
   // ------------------------------------------------------------------

@@ -44,6 +44,7 @@ export default function SettingsPanel() {
   // Note: 'credentials' tab is hidden from the tab bar but still rendered for backward compatibility
   const [toolsSubTab, setToolsSubTab] = useState<'builtin' | 'custom' | 'mcp' | 'email'>('builtin');
   const [generalSubTab, setGeneralSubTab] = useState<'msgDisplay' | 'license' | 'system' | 'shortcuts'>('msgDisplay');
+  const [oemSubTab, setOemSubTab] = useState<'devMcp' | 'oem'>('devMcp');
 
   // Credentials
   const [credSystems, setCredSystems] = useState<Record<string, Record<string, string>>>({});
@@ -1298,9 +1299,20 @@ export default function SettingsPanel() {
       {activeTab === 'oem' && (
         <div className="-mx-6 -mb-6 h-[calc(100%-2rem)] overflow-y-auto">
           <div className="px-6 pt-4">
-            <DevMcpCard />
+            {/* Sub-tabs: 开发 MCP / OEM 接入（参考"系统通用"页签布局） */}
+            <div className="flex border-b border-gray-200 mb-4">
+              <button onClick={() => setOemSubTab('devMcp')}
+                className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${oemSubTab === 'devMcp' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                开发 MCP
+              </button>
+              <button onClick={() => setOemSubTab('oem')}
+                className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${oemSubTab === 'oem' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                OEM 接入
+              </button>
+            </div>
+            {oemSubTab === 'devMcp' && <DevMcpCard />}
           </div>
-          <OemConsolePanel />
+          {oemSubTab === 'oem' && <OemConsolePanel />}
         </div>
       )}
 

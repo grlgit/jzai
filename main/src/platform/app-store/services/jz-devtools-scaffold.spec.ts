@@ -92,7 +92,7 @@ describe('jz-devtools scaffold rendering', () => {
         fs.writeFileSync(target, content);
       }
       fs.symlinkSync(
-        path.resolve(appDir, '../../main/src/assets/sdk/node_modules'),
+        path.resolve(appDir, 'sdk', 'node_modules'),
         path.join(root, 'node_modules'),
         process.platform === 'win32' ? 'junction' : 'dir',
       );

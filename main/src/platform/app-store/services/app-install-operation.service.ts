@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 
 export type AppInstallPhase =
+  | 'downloading'
   | 'unpacking'
   | 'validating'
   | 'ready'
@@ -30,6 +31,9 @@ export interface AppInstallOperationStatus {
   appId?: string;
   version?: string;
   manifest?: { appId: string; version: string; name: unknown };
+  integrity?: AppPackageIntegrity;
+  /** true = 商城链路：ready 为过渡态（不停留等确认），面板轮询不应在 ready 停下 */
+  autoInstall?: boolean;
   warnings: string[];
   errors: string[];
   startedAt: string;
@@ -39,21 +43,21 @@ export interface AppInstallOperationStatus {
 
 interface AppInstallOperation extends AppInstallOperationStatus {
   stageDir?: string;
-  integrity?: AppPackageIntegrity;
 }
 
 @Injectable()
 export class AppInstallOperationService {
   private readonly operations = new Map<string, AppInstallOperation>();
 
-  create(): AppInstallOperationStatus {
+  create(initial?: { phase: AppInstallPhase; percent: number; message: string; autoInstall?: boolean }): AppInstallOperationStatus {
     const stageId = crypto.randomBytes(12).toString('hex');
     const now = new Date();
     const operation: AppInstallOperation = {
       stageId,
-      phase: 'unpacking',
-      percent: 5,
-      message: '正在解包应用包…',
+      phase: initial?.phase ?? 'unpacking',
+      percent: initial?.percent ?? 5,
+      message: initial?.message ?? '正在解包应用包…',
+      autoInstall: initial?.autoInstall,
       warnings: [],
       errors: [],
       startedAt: now.toISOString(),

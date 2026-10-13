@@ -25,8 +25,14 @@ export class AppStagingService {
     private readonly signatures: PackageSignatureService,
   ) {}
 
-  start(packagePath: string): AppInstallOperationStatus {
-    const operation = this.operations.create();
+  /**
+   * @param stageId 传入时挂到已存在的安装操作上（如商城链路已创建的 downloading 记录），
+   *                不传则新建操作（本机上传安装路径）。
+   */
+  start(packagePath: string, stageId?: string): AppInstallOperationStatus {
+    const operation = stageId
+      ? this.operations.get(stageId)
+      : this.operations.create();
     void this.stage(packagePath, operation.stageId);
     return operation;
   }
@@ -85,7 +91,9 @@ export class AppStagingService {
       );
     } catch (err: any) {
       this.logger.error(`Failed to stage app package ${stageId}: ${err.message}`, err.stack);
-      this.operations.fail(stageId, '应用包无法解包或校验，请确认它是有效的 .jzapp 文件');
+      // 真实原因（zip 损坏 / manifest 缺失 / schema 不符等）透出给面板，避免只见"失败"不见原因
+      const detail = String(err?.message || '未知错误').slice(0, 500);
+      this.operations.fail(stageId, `应用包无法解包或校验: ${detail}`);
       if (stageDir) this.operations.clearStageDir(stageId);
     } finally {
       fs.rmSync(packagePath, { force: true });

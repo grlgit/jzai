@@ -65,8 +65,14 @@ export interface AppPlatformFacade {
       licenseBlob: string | null; licenseExpiresAt: string | null;
       installDir: string | null;
     }>>;
-    installPackage(packagePath: string): Promise<{ appId: string }>;
-    upgradePackage(appId: string, packagePath: string): Promise<void>;
+    /** 商城安装进度：创建 downloading 阶段的安装操作，面板凭 stageId 轮询 GET /stage/:stageId */
+    beginInstallOperation(): Promise<{ stageId: string }>;
+    /** 仅允许写 downloading 阶段进度（percent 截断到 0-45）；后续阶段由安装链路状态机驱动 */
+    updateInstallProgress(stageId: string, percent: number, message: string): Promise<void>;
+    failInstallOperation(stageId: string, message: string): Promise<void>;
+    /** 挂到已有操作上的安装/升级：staging 校验→安装/升级全程进度写入该操作，终态 succeeded/failed */
+    installPackageTracked(stageId: string, packagePath: string): Promise<{ appId: string }>;
+    upgradePackageTracked(stageId: string, appId: string, packagePath: string): Promise<void>;
     setAppLicense(appId: string, licenseBlob: string): Promise<void>;
     /** 授权审计回写：仅限 'active' | 'license_expired'（其他状态由运行时状态机管理） */
     setAppStatus(appId: string, status: 'active' | 'license_expired'): Promise<void>;
@@ -120,9 +126,14 @@ export class AppPlatformService {
         installationToken: () => this.getInstallationToken(),
         installationId: () => this.getInstallationId(),
         listInstalledApps: () => this.listInstalledApps(),
-        installPackage: packagePath => this.installPackage(packagePath),
-        upgradePackage: (appId, packagePath) =>
-          this.moduleRef.get(lazyUpgrade(), { strict: false }).upgrade(appId, packagePath),
+        beginInstallOperation: () => this.beginInstallOperation(),
+        updateInstallProgress: (stageId, percent, message) =>
+          this.updateInstallProgress(stageId, percent, message),
+        failInstallOperation: (stageId, message) => this.failInstallOperation(stageId, message),
+        installPackageTracked: (stageId, packagePath) =>
+          this.installPackageTracked(stageId, packagePath),
+        upgradePackageTracked: (stageId, appId, packagePath) =>
+          this.upgradePackageTracked(stageId, appId, packagePath),
         setAppLicense: (appId, licenseBlob) => this.appLicenses.setLicense(appId, licenseBlob),
         setAppStatus: (appId, status) => this.setAppStatus(appId, status),
       };
@@ -188,37 +199,85 @@ export class AppPlatformService {
     }));
   }
 
-  /** stage → 等待校验通过 → installFromStage（同步完成，失败抛错） */
-  private async installPackage(packagePath: string): Promise<{ appId: string }> {
-    const op = this.staging.start(packagePath);
+  // ── 商城安装进度原语 ──
+
+  private async beginInstallOperation(): Promise<{ stageId: string }> {
+    const op = this.operations.create({
+      phase: 'downloading', percent: 0, message: '正在下载应用包…', autoInstall: true,
+    });
+    return { stageId: op.stageId };
+  }
+
+  private async updateInstallProgress(stageId: string, percent: number, message: string): Promise<void> {
+    const status = this.operations.get(stageId);
+    // 仅允许商城侧写 downloading 阶段；后续阶段由安装链路状态机驱动
+    if (status.phase !== 'downloading') return;
+    const clamped = Math.max(0, Math.min(45, Math.round(percent)));
+    this.operations.update(stageId, 'downloading', clamped, message);
+  }
+
+  private async failInstallOperation(stageId: string, message: string): Promise<void> {
+    const status = this.operations.get(stageId);
+    if (['succeeded', 'failed', 'expired'].includes(status.phase)) return;
+    this.operations.fail(stageId, message);
+  }
+
+  /**
+   * 挂到已有操作上的商城安装：staging 校验（挂接同一 stageId）→ installFromStage 全程进度 → succeed。
+   * 失败时操作已处于 failed（staging 失败）或由本方法标记。
+   */
+  private async installPackageTracked(stageId: string, packagePath: string): Promise<{ appId: string }> {
+    this.staging.start(packagePath, stageId);
     const deadline = Date.now() + 10 * 60 * 1000;
-    let status = op;
+    let status = this.operations.get(stageId);
     while (Date.now() < deadline) {
-      status = this.operations.get(op.stageId);
+      status = this.operations.get(stageId);
       if (status.phase === 'ready') break;
       if (['failed', 'expired'].includes(status.phase)) {
         throw new Error(status.errors.join('; ') || status.message);
       }
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
-    if (status.phase !== 'ready') throw new Error('安装准备超时');
+    if (status.phase !== 'ready') {
+      this.operations.fail(stageId, '安装准备超时');
+      throw new Error('安装准备超时');
+    }
 
-    const stageDir = this.operations.getInstallStageDir(op.stageId);
-    const integrity = this.operations.getIntegrity(op.stageId);
+    const stageDir = this.operations.getInstallStageDir(stageId);
+    const integrity = this.operations.getIntegrity(stageId);
     try {
       await this.moduleRef.get(lazyInstall(), { strict: false }).installFromStage(
-        stageDir, {}, () => {},
+        stageDir, {},
+        (phase, percent, message) => this.operations.update(stageId, phase, percent, message),
         {
           purgeOrphanedData: false,
           packageSha256: integrity?.packageSha256 ?? null,
           signatureVerified: integrity?.signatureVerified ?? false,
         },
       );
-      this.operations.succeed(op.stageId);
+      this.operations.succeed(stageId);
+    } catch (err: any) {
+      this.operations.fail(stageId, err.message || '应用安装失败');
+      throw err;
     } finally {
-      this.operations.clearStageDir(op.stageId);
+      this.operations.clearStageDir(stageId);
     }
     return { appId: status.manifest!.appId };
+  }
+
+  /** 挂到已有操作上的商城升级：upgrade 全程进度写入该操作 */
+  private async upgradePackageTracked(stageId: string, appId: string, packagePath: string): Promise<void> {
+    try {
+      await this.moduleRef.get(lazyUpgrade(), { strict: false }).upgrade(
+        appId, packagePath,
+        (phase: 'unpacking' | 'validating' | 'installing' | 'migrating' | 'activating', percent: number, message: string) =>
+          this.operations.update(stageId, phase, percent, message),
+      );
+      this.operations.succeed(stageId);
+    } catch (err: any) {
+      this.operations.fail(stageId, err.message || '应用升级失败');
+      throw err;
+    }
   }
 
   // ── 实现 ──

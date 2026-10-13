@@ -4,7 +4,7 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "deleteOutDir": true,
-    "assets": ["**/*.sql", "**/*.ttf", { "include": "assets/sdk/**/*", "outDir": "dist" }],
+    "assets": ["**/*.sql", "**/*.ttf"],
     "watchAssets": true
   }
 }

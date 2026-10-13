@@ -58,8 +58,8 @@ cd coworker-app && npm install && npm start
 
 平台能力以 `.jzapp` 扩展包形式分发。开发者**无需本平台源码**：
 
-1. 从运行实例下载 SDK：`GET /api/app-store/sdk.tgz`（类型 / 构建脚本 / 6 个模板，源码见 `main/src/assets/sdk/`）
-2. 或连接实例的开发 MCP（`POST /api/dev/mcp`），让 AI 编程助手完成脚手架、校验、安装与调试
+1. 连接实例的开发 MCP（`POST /api/dev/mcp`）：AI 编程助手经 `jd_scaffold_app` 脚手架（自动附带 SDK 构建/打包/发布工具链）与 `jd_sync_sdk`（已有工程补充/升级工具链）完成开发、校验、安装与调试
+2. SDK 唯一来源内置于 jz-devtools 扩展包（`app-packages/jz-devtools/sdk/`：类型 / 构建脚本 / packager 打包分发库 / 6 个模板）
 3. 安装管理：主台 → 设置 → 应用管理
 
 ## 测试

@@ -234,9 +234,9 @@ export default function Sidebar({ active, onNavigate, panels, onCustomize }: Sid
               ) : (
                 <div className="flex flex-wrap gap-2.5">
                   {activeApps.map(app => (
-                    <div key={app.appId} className="flex-1 min-w-[210px] max-w-full bg-gray-50 rounded-lg p-2.5">
-                      {/* APP 分组头 */}
-                      <div className="flex items-baseline gap-1.5 px-1 pb-1.5 mb-1.5 border-b border-gray-200" title={app.appId}>
+                    <div key={app.appId} className="flex-1 min-w-[210px] max-w-full bg-white border border-gray-200 rounded-lg p-2.5">
+                      {/* APP 分组头（灰底标题区） */}
+                      <div className="flex items-baseline gap-1.5 -mx-2.5 -mt-2.5 px-3.5 py-2 mb-1.5 bg-gray-50 border-b border-gray-200 rounded-t-lg" title={app.appId}>
                         <span className="text-xs font-semibold text-gray-800 truncate">{appDisplayName(app.name, app.appId)}</span>
                         <span className="text-[10px] text-gray-400 shrink-0">v{app.version}</span>
                       </div>
@@ -246,8 +246,8 @@ export default function Sidebar({ active, onNavigate, panels, onCustomize }: Sid
                           <button
                             key={`${app.appId}-${panel.id}`}
                             onClick={() => { onNavigate(panel.id); setAppMenuOpen(false); }}
-                            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm hover:bg-white hover:shadow-sm transition-all ${
-                              active === panel.id ? 'text-indigo-600 bg-white shadow-sm' : 'text-gray-600'
+                            className={`flex items-center gap-1.5 px-2 py-1.5 rounded-md text-sm hover:bg-gray-100 transition-all ${
+                              active === panel.id ? 'text-indigo-600 bg-gray-100' : 'text-gray-600'
                             }`}
                             title={panel.description || app.description}
                           >
