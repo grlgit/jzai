@@ -64,6 +64,9 @@ export default function Home() {
   const [showShortcutCustomize, setShowShortcutCustomize] = useState(false);
   const [chatWidth, setChatWidth] = useState(304);
   const [showCustomize, setShowCustomize] = useState(false);
+  const [welcomeTitle, setWelcomeTitle] = useState('');
+  const [editingWelcome, setEditingWelcome] = useState(false);
+  const [welcomeDraft, setWelcomeDraft] = useState('');
   const [myCoWorkers, setMyCoWorkers] = useState<any[]>([]);
   const [showHeaderAgentMenu, setShowHeaderAgentMenu] = useState(false);
   const headerAgentMenuRef = useRef<HTMLDivElement>(null);
@@ -141,6 +144,29 @@ export default function Home() {
     };
     return () => { window.fetch = origFetch; };
   }, []);
+
+  // Load per-user customized welcome title
+  useEffect(() => {
+    if (!token) { setWelcomeTitle(''); return; }
+    fetch(`${MAIN_URL}/api/sessions/settings/current`, {
+      headers: { 'Authorization': `Bearer ${token}` },
+    }).then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d) setWelcomeTitle(d.welcomeTitle || ''); })
+      .catch(() => {});
+  }, [token]);
+
+  const saveWelcomeTitle = async () => {
+    const title = welcomeDraft.trim();
+    try {
+      await fetch(`${MAIN_URL}/api/sessions/settings/current`, {
+        method: 'PUT',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ welcomeTitle: title }),
+      });
+    } catch {}
+    setWelcomeTitle(title);
+    setEditingWelcome(false);
+  };
 
   // Navigation trace: catch unexpected redirects (no user interaction)
   useEffect(() => {
@@ -626,9 +652,33 @@ export default function Home() {
         <div className={`flex-1 flex flex-col items-center overflow-y-auto ${compact ? 'justify-end pb-0' : 'pt-[18vh]'} px-6`}>
           {!compact && (
             <>
-              <h1 className="text-2xl font-semibold bg-gradient-to-br from-gray-900 to-indigo-600 bg-clip-text text-transparent mb-3">
-                {t('welcome.title')}
-              </h1>
+              {editingWelcome ? (
+                <div className="flex items-center gap-2 mb-3">
+                  <input
+                    autoFocus
+                    value={welcomeDraft}
+                    onChange={(e) => setWelcomeDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') saveWelcomeTitle(); if (e.key === 'Escape') setEditingWelcome(false); }}
+                    placeholder={t('welcome.customizePlaceholder')}
+                    className="w-80 px-3 py-1.5 text-sm border border-indigo-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                  />
+                  <button onClick={saveWelcomeTitle}
+                    className="px-3 py-1.5 text-xs font-medium text-white bg-indigo-500 rounded-lg hover:bg-indigo-600">{t('common.save')}</button>
+                  <button onClick={() => setEditingWelcome(false)}
+                    className="px-3 py-1.5 text-xs text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50">{t('common.cancel')}</button>
+                </div>
+              ) : (
+                <div className="relative group mb-3">
+                  <h1 className="text-2xl font-semibold bg-gradient-to-br from-gray-900 to-indigo-600 bg-clip-text text-transparent">
+                    {welcomeTitle || t('welcome.title')}
+                  </h1>
+                  <button
+                    onClick={() => { setWelcomeDraft(welcomeTitle); setEditingWelcome(true); }}
+                    className="absolute left-full top-1/2 -translate-y-1/2 ml-3 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity text-xs px-2 py-1 rounded-md border border-gray-200 text-gray-400 bg-white shadow-sm hover:border-indigo-400 hover:text-indigo-500">
+                    {t('welcome.customize')}
+                  </button>
+                </div>
+              )}
               <p className="text-sm text-gray-400 mb-7">{t('welcome.subtitle')}</p>
               <div className="flex gap-2 mb-8 flex-wrap justify-center">
                 {shortcuts.map((s) => {

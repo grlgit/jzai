@@ -84,6 +84,10 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
   // ref 镜像：socket 事件 handler 闭包内读取最新值（sessionId 过滤 / 重连 re-attach）
   const sessionIdRef = useRef<string | null>(null);
   useEffect(() => { sessionIdRef.current = sessionId; }, [sessionId]);
+  // 当前正在跟踪的 run（后端 chat.run / chat.attached 下发）：流事件按 runId 精确过滤。
+  // 旧的 sessionId 过滤在 sessionId 尚未就位的空窗期会放行一切（新建会话到 chat.session 回包之间），
+  // 导致旧会话的 delta 闪入新会话——runId 过滤没有这个空窗。
+  const currentRunIdRef = useRef<string | null>(null);
   const messagesRef = useRef<ChatMessage[]>([]);
   useEffect(() => { messagesRef.current = messages; }, [messages]);
   // 最近一次已应用的 attach 快照签名（sessionId:startedAt:status:textLen），重连重复 attach 时幂等
@@ -144,6 +148,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     if (inactivityTimerRef.current) { clearInterval(inactivityTimerRef.current); inactivityTimerRef.current = null; }
     streamBatcherRef.current.reset();
     assistantIdRef.current = '';
+    currentRunIdRef.current = null;
     splitNextRef.current = false;
     thinkingBufRef.current = '';
     thinkingHeadRef.current = '';
@@ -161,6 +166,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     setContextStatus(null);
     streamBatcherRef.current.reset();
     assistantIdRef.current = '';
+    currentRunIdRef.current = null;
     splitNextRef.current = false;
     thinkingBufRef.current = '';
     thinkingHeadRef.current = '';
@@ -233,12 +239,26 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
   }, [conversationId, socket, agentId]);
 
   useEffect(() => {
-    const onStream = (data: { conversationId: string; sessionId?: string; delta: string; done: boolean; model?: string; cost?: number; tokens?: { input: number; output: number; total: number } }) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+    /**
+     * 统一的流事件过滤：是否属于当前正在跟踪的 run。
+     * 1) conversationId 必须匹配（跨 agent 隔离）；
+     * 2) 事件带 runId 时须等于 currentRunIdRef（本轮 run 的精确匹配，无空窗）；
+     * 3) 兼容无 runId 的旧事件：退化为 sessionId 过滤。
+     */
+    const isCurrentRun = (data: { conversationId?: string; sessionId?: string; runId?: string }): boolean => {
+      if (data.conversationId !== conversationId) return false;
+      if (data.runId) return data.runId === currentRunIdRef.current;
+      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return false;
+      return true;
+    };
+
+    const onStream = (data: { conversationId: string; sessionId?: string; runId?: string; delta: string; done: boolean; model?: string; cost?: number; tokens?: { input: number; output: number; total: number } }) => {
+      if (!isCurrentRun(data)) return;
       lastActivityRef.current = Date.now();
       if (data.done) {
+        // 本地未跟踪任何 run（如已被 stop/超时收尾）——忽略迟到的 done，防止其清掉新 run 的状态
+        if (!assistantIdRef.current) return;
+        currentRunIdRef.current = null;
         if (inactivityTimerRef.current) { clearInterval(inactivityTimerRef.current); inactivityTimerRef.current = null; }
         const finalText = streamBatcherRef.current.flush();
         const aid = assistantIdRef.current;
@@ -280,9 +300,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     };
 
     const onMetadata = (data: { conversationId: string; sessionId?: string; source: { file: string; page?: number } }) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       const aid = assistantIdRef.current;
       setMessages(prev => prev.map(m =>
         m.id === aid ? { ...m, source: data.source } : m
@@ -290,9 +308,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     };
 
     const onTool = (data: { conversationId: string; sessionId?: string; toolName: string; args?: any; result?: any }) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       if (!assistantIdRef.current) return; // 本地未跟踪 run——忽略残余事件
       lastActivityRef.current = Date.now();
       const aid = assistantIdRef.current;
@@ -315,9 +331,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     };
 
     const onError = (data: { conversationId: string; sessionId?: string; error: string }) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       streamBatcherRef.current.flush();
       setIsStreaming(false);
       if (inactivityTimerRef.current) { clearInterval(inactivityTimerRef.current); inactivityTimerRef.current = null; }
@@ -353,9 +367,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     };
 
     const onDebug = (data: any) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       lastActivityRef.current = Date.now();
       setDebugEvents(prev => [...prev, data as DebugEvent]);
     };
@@ -366,11 +378,15 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
       setSessionId(data.sessionId);
     };
 
+    // 本轮 run 的标识（chat.send 被受理后下发）：流事件按它精确过滤
+    const onRun = (data: { conversationId: string; sessionId?: string; runId: string }) => {
+      if (data.conversationId !== conversationId) return;
+      currentRunIdRef.current = data.runId;
+    };
+
     // 推理模型思考流：过程展示 + 活动信号（长推理期间重置无活动超时）
     const onThinking = (data: { conversationId: string; sessionId?: string; delta: string }) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       if (!assistantIdRef.current) return; // 本地未跟踪 run——忽略残余思考事件（否则思考区卡在旧会话）
       lastActivityRef.current = Date.now();
       if (!data.delta) return;
@@ -393,9 +409,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
 
     // 新一轮 LLM 调用：重置思考流（思考内容按轮次替换，不跨轮叠加）
     const onThinkingReset = (data: { conversationId: string; sessionId?: string }) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       lastActivityRef.current = Date.now();
       thinkingBufRef.current = '';
       thinkingHeadRef.current = '';
@@ -405,9 +419,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
 
     // P0-1: context health — show usage / compaction / reset notices
     const onContext = (data: { conversationId: string; sessionId?: string } & ContextStatus) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       lastActivityRef.current = Date.now();
       setContextStatus({ usagePercent: data.usagePercent, level: data.level, detail: data.detail });
       // compacted/reset are transient toasts — downgrade to a quiet state after a few seconds
@@ -424,16 +436,12 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     };
 
     const onAction = (data: any) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       window.dispatchEvent(new CustomEvent('jianzhi:agent-action', { detail: data }));
     };
 
     const onConfirm = (data: any) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       lastActivityRef.current = Date.now();
       setPendingConfirm({
         confirmId: data.confirmId,
@@ -448,7 +456,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
 
     // 重进会话恢复（chat.attach 响应）：running → 快照续流；done/error → 补全该轮；none → 无操作
     const onAttached = (data: {
-      conversationId?: string; sessionId?: string;
+      conversationId?: string; sessionId?: string; runId?: string;
       status: 'running' | 'done' | 'error' | 'none';
       snapshot?: { text: string; toolCalls?: ChatMessage['toolCalls']; model?: string; cost?: number; tokens?: any; error?: string; startedAt?: number };
     }) => {
@@ -475,6 +483,8 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
 
       const applySnapshot = () => {
         if (data.status === 'running') {
+          // 续流前记录该 run 的 runId：后续实时事件按 runId 过滤，不记录会被全部丢弃
+          if (data.runId) currentRunIdRef.current = data.runId;
           if (assistantIdRef.current) return; // 本端已在流式（如重连场景），仅 re-join room 即可
           const aid = `reattach-${Date.now()}`;
           assistantIdRef.current = aid;
@@ -536,6 +546,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     socket.on('chat.debug', onDebug);
     socket.on('chat.error', onError);
     socket.on('chat.session', onSession);
+    socket.on('chat.run', onRun);
     socket.on('chat.thinking', onThinking);
     socket.on('chat.thinking_reset', onThinkingReset);
     socket.on('chat.context', onContext);
@@ -543,18 +554,14 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     socket.on('chat.confirm', onConfirm);
 
     const onConfirmDismiss = (data: any) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       setPendingConfirm(null);
     };
     socket.on('chat.confirm_dismiss', onConfirmDismiss);
 
     // 活动信号：工具开始 / 回合心跳 —— 仅重置无活动超时，避免长工具/慢生成被误判超时
     const onActivity = (data: { conversationId: string; sessionId?: string }) => {
-      if (data.conversationId !== conversationId) return;
-      // 同 agent 多会话隔离：事件带 sessionId 时须匹配当前会话（socket 可能仍停留在旧会话的 room）
-      if (data.sessionId && sessionIdRef.current && data.sessionId !== sessionIdRef.current) return;
+      if (!isCurrentRun(data)) return;
       lastActivityRef.current = Date.now();
     };
     socket.on('chat.tool_start', onActivity);
@@ -582,6 +589,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
       socket.off('chat.debug', onDebug);
       socket.off('chat.error', onError);
       socket.off('chat.session', onSession);
+      socket.off('chat.run', onRun);
       socket.off('chat.thinking', onThinking);
       socket.off('chat.thinking_reset', onThinkingReset);
       socket.off('chat.context', onContext);
@@ -713,6 +721,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
     ));
     streamBatcherRef.current.reset();
     assistantIdRef.current = '';
+    currentRunIdRef.current = null;
     setIsStreaming(false);
     if (inactivityTimerRef.current) { clearInterval(inactivityTimerRef.current); inactivityTimerRef.current = null; }
   }, [isStreaming, socket, conversationId, sessionId]);

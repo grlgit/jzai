@@ -36,6 +36,8 @@
 
   "welcome.title": "Smart AI, Easy Work",
   "welcome.subtitle": "Full of surprises, the more you use, the better I understand",
+  "welcome.customize": "Customize",
+  "welcome.customizePlaceholder": "Enter your welcome text, empty to restore default…",
 
   "chat.placeholder": "Type your question or command...",
   "chat.mentionSwitch": "Switch to…",

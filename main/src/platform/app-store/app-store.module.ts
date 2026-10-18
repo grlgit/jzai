@@ -27,6 +27,7 @@ import { AppPlatformService } from './services/app-platform.service';
 import { AppConnectionBindingService } from './services/app-connection-binding.service';
 import { AppServicePrincipalService } from './services/app-service-principal.service';
 import { DevMcpService } from './services/dev-mcp.service';
+import { DevUploadService } from './services/dev-upload.service';
 import { DevMcpController } from './dev-mcp.controller';
 import { AppInstanceService } from './services/app-instance.service';
 import { AppValidatorService } from './validators/app-validator.service';
@@ -79,6 +80,7 @@ import { AppServicePrincipalController } from './app-service-principal.controlle
     AppServicePrincipalService,
     AppConnectionBindingService,
     DevMcpService,
+    DevUploadService,
   ],
   exports: [
     AppCapabilityModule,

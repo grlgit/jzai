@@ -38,6 +38,7 @@ function createTokenService() {
     audit as any,
     credentials as any,
     {} as any,
+    {} as any,
   );
   return { service, db, audit, rows };
 }
@@ -136,6 +137,7 @@ describe('DevMcpService resources', () => {
       {} as any,
       {} as any,
       { findAll: jest.fn().mockResolvedValue([{ status: 'active', installDir: root, manifest: { platformCapabilities: ['appstore:manage'] } }]) } as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,

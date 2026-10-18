@@ -303,6 +303,26 @@ export class SessionService {
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
   }
 
+  async getWelcomeTitle(userId: string): Promise<string> {
+    const fs = await import('fs');
+    const settingsPath = this.workspace.getUserFilePath(userId, 'settings.json');
+    try {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+      return settings.welcomeTitle || '';
+    } catch {
+      return '';
+    }
+  }
+
+  async setWelcomeTitle(userId: string, title: string) {
+    const fs = await import('fs');
+    const settingsPath = this.workspace.getUserFilePath(userId, 'settings.json');
+    let settings: any = {};
+    try { settings = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')); } catch {}
+    if (title) settings.welcomeTitle = title; else delete settings.welcomeTitle;
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+  }
+
   // ===== Auto-extract personal knowledge from session =====
 
   async extractKnowledge(sessionId: string): Promise<void> {

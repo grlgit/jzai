@@ -35,13 +35,21 @@ export class SessionController {
 
   @Get('settings/current')
   async getSettings(@Req() req: any) {
-    const max = await this.sessionService.getMaxSessions(req.user?.id);
-    return { maxSessions: max };
+    const [max, welcomeTitle] = await Promise.all([
+      this.sessionService.getMaxSessions(req.user?.id),
+      this.sessionService.getWelcomeTitle(req.user?.id),
+    ]);
+    return { maxSessions: max, welcomeTitle };
   }
 
   @Put('settings/current')
-  async updateSettings(@Body() body: { maxSessions: number }, @Req() req: any) {
-    await this.sessionService.setMaxSessions(req.user?.id, body.maxSessions);
+  async updateSettings(@Body() body: { maxSessions?: number; welcomeTitle?: string }, @Req() req: any) {
+    if (body.maxSessions !== undefined) {
+      await this.sessionService.setMaxSessions(req.user?.id, body.maxSessions);
+    }
+    if (body.welcomeTitle !== undefined) {
+      await this.sessionService.setWelcomeTitle(req.user?.id, body.welcomeTitle);
+    }
     return { success: true };
   }
 

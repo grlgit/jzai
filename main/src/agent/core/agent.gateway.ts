@@ -3,6 +3,7 @@ import {
   OnGatewayConnection, OnGatewayDisconnect, MessageBody, ConnectedSocket,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { randomUUID } from 'crypto';
 import { Logger, Optional, Inject, forwardRef } from '@nestjs/common';
 import { DynamicAgentService, StreamChunk } from './dynamic-agent.service';
 import { SessionService } from '../session/session.service';
@@ -49,6 +50,7 @@ function sanitizeToolCallsForStorage(toolCalls: any[] | undefined): any[] {
 /** 进行中的一轮生成：供重进会话（chat.attach）恢复流式状态用。内存态，后端重启即丢失（退化为仅历史）。 */
 interface ActiveRun {
   key: string;              // `${userId}:${agentSessionId}`
+  runId: string;            // 本轮生成的唯一标识：随所有流事件下发，前端据此精确过滤（防串流）
   room: string;             // `chatrun:${userId}:${agentSessionId}`
   userId: string;
   agentId: string;
@@ -90,6 +92,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     for (const [k, r] of this.activeRuns) {
       if (r.expiresAt && r.expiresAt <= now) this.activeRuns.delete(k);
     }
+  }
+
+  /**
+   * 串流防护第一层：加入新 run 的 room 前，退出该用户名下其他所有 chatrun room。
+   * socket 只 join 不 leave 的话，切换/新建会话后旧会话的流事件仍会抵达本 socket，
+   * 是否显示完全依赖前端过滤（有空窗）——这是会话间响应"闪现穿透"的主因。
+   */
+  private joinRunRoom(client: Socket, userId: string, room: string) {
+    const prefix = `chatrun:${userId}:`;
+    for (const r of client.rooms) {
+      if (r !== room && r.startsWith(prefix)) client.leave(r);
+    }
+    client.join(room);
   }
 
   constructor(
@@ -243,14 +258,29 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
     // 注册进行中 run 并让发起方入 room：重进会话的其他 socket 可 attach 到同一 room 接续收事件
     this.pruneRuns();
+    const runKey = `${userId}:${agentSessionId}`;
+
+    // 串流防护：同一会话已有进行中的 run 时拒绝并发第二发（双击发送/双标签页）。
+    // 若不拒绝，activeRuns 按 key 覆盖后两路生成器会向同一 room 交织推流且无法区分来源。
+    const existing = this.activeRuns.get(runKey);
+    if (existing?.status === 'running') {
+      this.logger.warn(`chat.send rejected: session ${agentSessionId} already has a running run (user=${userId})`);
+      client.emit('chat.error', { conversationId, sessionId: agentSessionId, error: '当前会话正在生成回复，请等待完成或先停止' });
+      client.emit('chat.stream', { conversationId, sessionId: agentSessionId, delta: '', done: true });
+      return;
+    }
+
     const run: ActiveRun = {
-      key: `${userId}:${agentSessionId}`,
+      key: runKey,
+      runId: randomUUID(),
       room: `chatrun:${userId}:${agentSessionId}`,
       userId, agentId, agentSessionId, conversationId,
       status: 'running', text: '', toolCalls: [], startedAt: Date.now(),
     };
     this.activeRuns.set(run.key, run);
-    client.join(run.room);
+    // 入新 room 前先退出旧 chatrun room，并把 runId 告知发起方（前端据此过滤本轮流事件）
+    this.joinRunRoom(client, userId, run.room);
+    client.emit('chat.run', { conversationId, sessionId: agentSessionId, runId: run.runId });
 
     // Record user message event for analytics
     this.analytics.recordEvent({ type: 'conversation_message', conversationId, userId, agentId, contentLength: content?.length || 0 }).catch(() => {});
@@ -317,7 +347,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
       // Safety: ensure frontend always gets a done signal
       if (!gotDone) {
-        this.server.to(run.room).emit('chat.stream', { conversationId, sessionId: run.agentSessionId, delta: '', done: true, model: 'unknown' });
+        this.server.to(run.room).emit('chat.stream', { conversationId, sessionId: run.agentSessionId, runId: run.runId, delta: '', done: true, model: 'unknown' });
       }
 
       // run 置终态并保留 60s：attach 恰在 done 与落库之间时可取回最终文本
@@ -354,9 +384,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       run.status = 'error';
       run.error = is402 ? '积分不足，请充值后继续使用' : msg;
       run.expiresAt = Date.now() + RUN_RETENTION_MS;
-      this.server.to(run.room).emit('chat.error', { conversationId, sessionId: run.agentSessionId, error: run.error });
+      this.server.to(run.room).emit('chat.error', { conversationId, sessionId: run.agentSessionId, runId: run.runId, error: run.error });
       // Ensure streaming ends on frontend even after error
-      this.server.to(run.room).emit('chat.stream', { conversationId, sessionId: run.agentSessionId, delta: '', done: true });
+      this.server.to(run.room).emit('chat.stream', { conversationId, sessionId: run.agentSessionId, runId: run.runId, delta: '', done: true });
     } finally {
       this.confirmBridge.events.off('confirm_request', onConfirmRequest);
       this.confirmBridge.events.off('confirm_timeout', onConfirmTimeout);
@@ -418,11 +448,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return;
     }
 
-    // 先 join 再发快照：消除快照与实时事件之间的漏事件窗口
-    client.join(run.room);
+    // 先 join 再发快照：消除快照与实时事件之间的漏事件窗口。
+    // 同样先退出旧 chatrun room——attach 切换会话时不残留旧订阅。
+    this.joinRunRoom(client, userId, run.room);
     client.emit('chat.attached', {
       conversationId: run.conversationId,
       sessionId: run.agentSessionId,
+      runId: run.runId,
       status: run.status,
       snapshot: {
         text: run.text,
@@ -433,10 +465,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     });
   }
 
-  /** 广播到 run 的 room：发起方与 attach 重进的其他 socket 都能收到；payload 统一带 sessionId 供前端二次过滤 */
+  /** 广播到 run 的 room：发起方与 attach 重进的其他 socket 都能收到；payload 统一带 sessionId+runId 供前端精确过滤 */
   private emitChunk(run: ActiveRun, chunk: StreamChunk) {
     const to = this.server.to(run.room);
-    const base = { conversationId: run.conversationId, sessionId: run.agentSessionId };
+    const base = { conversationId: run.conversationId, sessionId: run.agentSessionId, runId: run.runId };
     switch (chunk.type) {
       case 'debug':
         to.emit('chat.debug', { ...base, ...chunk.debug });

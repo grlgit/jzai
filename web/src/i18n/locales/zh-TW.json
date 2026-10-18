@@ -36,6 +36,8 @@
 
   "welcome.title": "開門見智，工作省事",
   "welcome.subtitle": "相遇滿是驚喜，越用我越懂你",
+  "welcome.customize": "定製內容",
+  "welcome.customizePlaceholder": "輸入你的歡迎詞，留空恢復默認…",
 
   "chat.placeholder": "輸入你的問題或指令...",
   "chat.mentionSwitch": "切換到…",

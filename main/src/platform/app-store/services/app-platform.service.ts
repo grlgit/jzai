@@ -15,6 +15,8 @@ import type { AppUpgradeService } from './app-upgrade.service';
 import { AppStagingService } from './app-staging.service';
 import { AppInstallOperationService } from './app-install-operation.service';
 import { AppLicenseService } from './app-license.service';
+import { DevUploadService } from './dev-upload.service';
+import { SafeArchiveService } from './safe-archive.service';
 import { DbService } from '../../../db/db.service';
 import { createServicePrincipal } from '../runtime/invocation-principal';
 
@@ -45,6 +47,12 @@ export interface AppPlatformFacade {
   upgrade?(appId: string, files: Record<string, string>): Promise<{ ok: true }>;
   validatePackage?(
     files: Record<string, string>,
+  ): Promise<{ ok: boolean; issues: Array<{ code: string; path?: string; message: string; hint?: string }> }>;
+  /** 大包通道（DevUploadService 句柄）：与 files 版等价，执行后句柄 consumed 并清理临时文件 */
+  installFromUpload?(uploadId: string, config?: Record<string, unknown>): Promise<{ appId: string; status: string }>;
+  upgradeFromUpload?(appId: string, uploadId: string): Promise<{ ok: true }>;
+  validateFromUpload?(
+    uploadId: string,
   ): Promise<{ ok: boolean; issues: Array<{ code: string; path?: string; message: string; hint?: string }> }>;
   listPlatformTools?(): Promise<Array<{ id: string; group?: string; description?: string; source: string }>>;
   describeTool?(toolId: string): Promise<unknown>;
@@ -94,6 +102,8 @@ export class AppPlatformService {
     private readonly staging: AppStagingService,
     private readonly operations: AppInstallOperationService,
     private readonly appLicenses: AppLicenseService,
+    private readonly uploads: DevUploadService,
+    private readonly archives: SafeArchiveService,
   ) {}
 
   /**
@@ -109,6 +119,9 @@ export class AppPlatformService {
       facade.stageAndInstall = (files, config) => this.stageAndInstall(files, config);
       facade.upgrade = (appId, files) => this.upgradeApp(appId, files);
       facade.validatePackage = files => this.validatePackage(files);
+      facade.installFromUpload = (uploadId, config) => this.installFromUpload(uploadId, config);
+      facade.upgradeFromUpload = (appId, uploadId) => this.upgradeFromUpload(appId, uploadId);
+      facade.validateFromUpload = uploadId => this.validateFromUpload(uploadId);
       facade.listPlatformTools = () => this.listPlatformTools();
       facade.describeTool = toolId => this.describeTool(toolId);
       const principal = createServicePrincipal(manifest.appId, 'app-platform', ['app:invoke']);
@@ -318,20 +331,70 @@ export class AppPlatformService {
     const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'jzdev-validate-'));
     try {
       await this.writeFiles(dir, files);
-      const ids = await this.registry.getExistingIds();
-      const report = await this.moduleRef.get(AppValidatorService, { strict: false }).validate(
-        dir, ids.appIds, ids.shortNames, ids.nsPrefixes, ids.schemaNames, ids.panelIds, ids.toolIds,
-      );
-      const issues = [...report.criticals, ...report.warnings].map((c: any) => ({
-        code: c.code,
-        message: c.message,
-        path: c.details,
-        hint: this.hintFor(c.code),
-      }));
-      return { ok: report.passed, issues };
+      return await this.validateDir(dir);
     } finally {
       fs.rm(dir, { recursive: true, force: true }, () => {});
     }
+  }
+
+  // ── 大包上传通道（uploadId → 包路径 → 与 files 版同链路）──
+
+  private async installFromUpload(
+    uploadId: string,
+    config?: Record<string, unknown>,
+  ): Promise<{ appId: string; status: string }> {
+    const packagePath = this.uploads.consume(uploadId);
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'jzdev-install-'));
+    try {
+      await this.archives.extract(packagePath, dir);
+      const manifest = this.readManifest(dir);
+      await this.moduleRef.get(lazyInstall(), { strict: false })
+        .installFromStage(dir, config ?? {}, () => {}, {});
+      return { appId: manifest.appId, status: 'active' };
+    } finally {
+      fs.rm(dir, { recursive: true, force: true }, () => {});
+      this.uploads.release(uploadId);
+    }
+  }
+
+  private async upgradeFromUpload(appId: string, uploadId: string): Promise<{ ok: true }> {
+    const packagePath = this.uploads.consume(uploadId);
+    try {
+      await this.moduleRef.get(lazyUpgrade(), { strict: false }).upgrade(appId, packagePath);
+      return { ok: true };
+    } finally {
+      this.uploads.release(uploadId);
+    }
+  }
+
+  private async validateFromUpload(
+    uploadId: string,
+  ): Promise<{ ok: boolean; issues: Array<{ code: string; path?: string; message: string; hint?: string }> }> {
+    const packagePath = this.uploads.consume(uploadId);
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'jzdev-validate-'));
+    try {
+      await this.archives.extract(packagePath, dir);
+      return await this.validateDir(dir);
+    } finally {
+      fs.rm(dir, { recursive: true, force: true }, () => {});
+      this.uploads.release(uploadId);
+    }
+  }
+
+  private async validateDir(
+    dir: string,
+  ): Promise<{ ok: boolean; issues: Array<{ code: string; path?: string; message: string; hint?: string }> }> {
+    const ids = await this.registry.getExistingIds();
+    const report = await this.moduleRef.get(AppValidatorService, { strict: false }).validate(
+      dir, ids.appIds, ids.shortNames, ids.nsPrefixes, ids.schemaNames, ids.panelIds, ids.toolIds,
+    );
+    const issues = [...report.criticals, ...report.warnings].map((c: any) => ({
+      code: c.code,
+      message: c.message,
+      path: c.details,
+      hint: this.hintFor(c.code),
+    }));
+    return { ok: report.passed, issues };
   }
 
   /** 机器可读修复建议（dev agent 自纠用） */

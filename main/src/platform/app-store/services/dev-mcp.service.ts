@@ -9,6 +9,7 @@ import { AppRegistryService } from './app-registry.service';
 import { AppAuditService } from './app-audit.service';
 import { CredentialService } from '../../../capability/skill/credential.service';
 import { ToolBridgeService } from '../../../agent/tool-bridge/tool-bridge.service';
+import { DevUploadService } from './dev-upload.service';
 import { createDevMcpPrincipal } from '../runtime/invocation-principal';
 
 export type DevTokenScope = 'read' | 'invoke' | 'manage';
@@ -31,6 +32,34 @@ const DEV_TOKEN_SCOPE = 'dev-mcp';
 const DEFAULT_DEV_TOKEN_SCOPES: DevTokenScope[] = ['read', 'invoke', 'manage'];
 
 /**
+ * 框架内置 MCP 工具（不依赖首方包 mcpExposed）。
+ * 大包上传编排：begin 预留句柄 → 客户端 multipart 直推 /api/dev/uploads → status 感知状态
+ * → 把 uploadId 传给 jd_install_app/jd_upgrade_app/jd_validate_package（jz-devtools 双模工具）。
+ */
+const BUILTIN_TOOLS: Array<{ name: string; description: string; inputSchema: unknown }> = [
+  {
+    name: 'jd_upload_begin',
+    description:
+      '大包上传第一步（包 >1MB 时必须走本通道，否则 JSON body 超 1mb 限制）：预留上传句柄，返回 {uploadId, uploadUrl, expiresAt}。' +
+      '随后用 HTTP multipart（字段名 package，Authorization: Bearer <dev-token>）把 .jzapp 直推 uploadUrl；' +
+      '再调 jd_upload_status 确认 ready；最后把 uploadId 传给 jd_install_app/jd_upgrade_app/jd_validate_package 执行。' +
+      '句柄 30 分钟过期、一次性使用。小包仍可走 files 内联。',
+    inputSchema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'jd_upload_status',
+    description:
+      '查询上传句柄状态：pending（等待文件）/ready（可执行）/consumed（已执行）/expired（已过期）。' +
+      '返回 {uploadId, status, size, sha256, createdAt, expiresAt}。',
+    inputSchema: {
+      type: 'object',
+      properties: { uploadId: { type: 'string', description: 'jd_upload_begin 返回的句柄 id' } },
+      required: ['uploadId'],
+    },
+  },
+];
+
+/**
  * Dev MCP（/api/dev/mcp）的支撑服务：
  * - dev token 签发/校验/吊销（jz_credentials scope=dev-mcp，AES-256-GCM）
  * - mcpExposed 工具聚合（仅首方包可声明，validator 已门控）
@@ -50,6 +79,7 @@ export class DevMcpService {
     private readonly audit: AppAuditService,
     private readonly credentials: CredentialService,
     private readonly moduleRef: ModuleRef,
+    private readonly uploads: DevUploadService,
   ) {}
 
   isEnabled(): boolean {
@@ -154,24 +184,48 @@ export class DevMcpService {
 
   async listTools(): Promise<Array<{ name: string; description: string; inputSchema: unknown }>> {
     const exposed = await this.getExposedToolIds();
-    if (exposed.size === 0) return [];
     const bridge = this.moduleRef.get(ToolBridgeService, { strict: false });
-    return bridge.getCatalog()
+    const exposedTools = exposed.size === 0 ? [] : bridge.getCatalog()
       .filter((e: any) => exposed.has(e.id))
       .map((e: any) => ({
         name: e.id,
         description: e.description ?? e.label ?? '',
         inputSchema: e.parameters ?? { type: 'object', properties: {} },
       }));
+    return [...BUILTIN_TOOLS, ...exposedTools];
   }
 
   async callTool(name: string, args: unknown, actorId: string): Promise<unknown> {
+    const builtin = BUILTIN_TOOLS.find(t => t.name === name);
+    if (builtin) {
+      const result = this.callBuiltinTool(name, args ?? {});
+      await this.audit.log('dev-mcp', 'dev_mcp_call', actorId, { tool: name });
+      return result;
+    }
     const exposed = await this.getExposedToolIds();
     if (!exposed.has(name)) throw new Error(`Tool not exposed via dev MCP: ${name}`);
     const bridge = this.moduleRef.get(ToolBridgeService, { strict: false });
     const result = await bridge.callTool(name, args, createDevMcpPrincipal(actorId));
     await this.audit.log('dev-mcp', 'dev_mcp_call', actorId, { tool: name });
     return result;
+  }
+
+  private callBuiltinTool(name: string, args: any): unknown {
+    switch (name) {
+      case 'jd_upload_begin': {
+        const record = this.uploads.begin();
+        return {
+          ...record,
+          uploadUrl: '/api/dev/uploads',
+          hint: `curl -X POST <instance>/api/dev/uploads -H "Authorization: Bearer <dev-token>" -F "package=@<your-app>.jzapp" -F "uploadId=${record.uploadId}"`,
+        };
+      }
+      case 'jd_upload_status':
+        if (!args?.uploadId) throw new Error('uploadId is required');
+        return this.uploads.get(args.uploadId);
+      default:
+        throw new Error(`Unknown builtin tool: ${name}`);
+    }
   }
 
   // ── resources（首方包 docs/ 与 templates/）──
