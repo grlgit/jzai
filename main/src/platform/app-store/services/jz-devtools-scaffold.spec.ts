@@ -17,6 +17,7 @@ const templateIds = [
   'multi-tab-app',
   'async-job-app',
   'external-svc-app',
+  'mcp-tool-app',
 ];
 
 describe('jz-devtools scaffold rendering', () => {
@@ -29,7 +30,7 @@ describe('jz-devtools scaffold rendering', () => {
 
   it('lists complete hyphenated template names', async () => {
     const templates = await listTemplates(appDir);
-    expect(templates).toHaveLength(6);
+    expect(templates).toHaveLength(7);
     expect(templates.find((entry: any) => entry.id === 'external-svc-app')?.name).toBe('external-svc-app');
   });
 

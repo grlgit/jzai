@@ -52,7 +52,7 @@ function createFixture() {
       enabled: true,
       tools: [{ name: 'orders', description: 'Orders', inputSchema, outputSchema }],
     }),
-    isAllowedForUser: jest.fn().mockReturnValue(true),
+    isAllowedForUser: jest.fn().mockResolvedValue(true),
   };
   const moduleRef = { get: jest.fn().mockReturnValue(bridge) };
   const service = new AppConnectionBindingService(
@@ -195,7 +195,7 @@ describe('AppConnectionBindingService', () => {
 
   test('rejects binding creation when the actor cannot access the connector', async () => {
     const { service, db, mcpRegistry } = createFixture();
-    mcpRegistry.isAllowedForUser.mockReturnValue(false);
+    mcpRegistry.isAllowedForUser.mockResolvedValue(false);
 
     await expect(service.createBinding(
       'com.example.app',
@@ -210,6 +210,7 @@ describe('AppConnectionBindingService', () => {
       'erp_primary',
       'user-1',
       ['planner'],
+      expect.anything(),
     );
     expect(db.query).not.toHaveBeenCalledWith(
       expect.stringContaining('INSERT INTO jz_app_connection_bindings'),
@@ -283,7 +284,7 @@ describe('AppConnectionBindingService', () => {
     )).resolves.toEqual({ ok: true });
 
     expect(servicePrincipals.assertActiveForApp).toHaveBeenCalledWith(binding.appId, delegated);
-    expect(mcpRegistry.isAllowedForUser).toHaveBeenCalledWith('erp_primary', 'user-1', ['planner']);
+    expect(mcpRegistry.isAllowedForUser).toHaveBeenCalledWith('erp_primary', 'user-1', ['planner'], expect.anything());
     expect(bridge.callTool).toHaveBeenCalledWith(
       'mcp_erp_primary_orders',
       { orderId: 'SO-1' },
@@ -533,7 +534,7 @@ describe('AppConnectionBindingService', () => {
         enabled: true,
         tools: [{ name: 'orders', description: 'Orders', inputSchema }],
       }),
-      isAllowedForUser: jest.fn().mockReturnValue(true),
+      isAllowedForUser: jest.fn().mockResolvedValue(true),
     };
     class BindingTestModule {}
     const moduleRef = await Test.createTestingModule({

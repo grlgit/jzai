@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { HarAnalyzerService, AnalyzedWorkflow, WorkflowStep } from './har-analyzer.service';
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 import { SkillRegistryService, SkillDefinition } from './skill-registry.service';
 import { ModelRouterService } from '../../model-router/model-router.service';
 import * as fs from 'fs';
@@ -30,7 +31,7 @@ export class SkillGeneratorService {
     skillName: string;
     systemName: string;
     credentials?: { username: string; password: string };
-  }): Promise<GenerationResult> {
+  }, actor?: InvocationPrincipal): Promise<GenerationResult> {
     // 1. Parse HAR
     let harJson: any;
     try {
@@ -82,7 +83,7 @@ export class SkillGeneratorService {
     };
 
     // 5. Save
-    this.registry.save(skill, handlerCode);
+    await this.registry.save(skill, handlerCode, actor);
     this.logger.log(`Generated skill: ${params.skillName}`);
 
     return {

@@ -3,6 +3,8 @@ import { McpRegistryService } from './mcp-registry.service';
 import { DbService } from '../../db/db.service';
 import { CredentialService } from '../skill/credential.service';
 import { UserService } from '../../user/user.service';
+import { RequireAdmin } from '../../platform/authz/require-permission.decorator';
+import { createUserPrincipal, InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -15,25 +17,28 @@ export class McpRegistryController {
     private readonly userService: UserService,
   ) {}
 
+  private principalOf(req: any): InvocationPrincipal {
+    const raw = req.user?.id ? req.user
+      : { id: this.extractUserId(req), role: { permissions: [] } };
+    return createUserPrincipal(raw, 'http:mcp');
+  }
+
+  /** P1：列表过滤改走 meta/grants（修 V6 连接侧）；admin 见全部（含 disabled），普通用户仅 enabled */
   @Get()
-  list(@Req() req: any) {
-    const userId = req.user?.id || this.extractUserId(req);
-    const roleIds = [
-      req.user?.role?.id,
-      ...(Array.isArray(req.user?.roles) ? req.user.roles.map((role: any) => role?.id ?? role) : []),
-    ].filter((roleId): roleId is string => typeof roleId === 'string' && roleId.length > 0);
-    const permissions = req.user?.permissions ?? req.user?.role?.permissions ?? [];
-    const isAdmin = Array.isArray(permissions) && permissions.includes('sys:admin');
-    return this.mcp.getAll()
-      .filter(m => isAdmin || this.mcp.isAllowedForUser(m.name, userId ?? undefined, roleIds))
-      .map(m => {
+  async list(@Req() req: any) {
+    const p = this.principalOf(req);
+    const isAdmin = p.permissions.includes('sys:admin');
+    const servers = await this.mcp.getAllForPrincipal(p);
+    const visible = isAdmin ? servers : servers.filter(m => m.enabled);
+    const results = await Promise.all(visible.map(async m => ({ m, tools: isAdmin ? m.tools : await this.mcp.visibleToolsFor(m.name, p) })));
+    return results.map(({ m, tools }) => {
       const authSystem = m.authSystem || m.system || m.name;
       const basePhase = m.status.phase || 'available';
 
       // Determine effective phase: building > unconfigured > available
       let phase = basePhase;
       if (basePhase === 'available' && m.authFields && m.authFields.length > 0) {
-        const creds = this.credentialService.resolveCredentials(userId || '', authSystem, m.authScope);
+        const creds = this.credentialService.resolveCredentials(p.userId || '', authSystem, m.authScope);
         if (!creds || Object.keys(creds).length === 0) phase = 'unconfigured';
       }
 
@@ -41,8 +46,8 @@ export class McpRegistryController {
         name: m.name, system: m.system, description: m.description,
         llmHint: m.llmHint || null,
         authSystem, authScope: m.authScope || undefined, authFields: m.authFields || null,
-        toolCount: m.tools.length,
-        tools: m.tools.map(t => ({ name: t.name, description: t.description || '' })),
+        toolCount: tools.length,
+        tools: tools.map(t => ({ name: t.name, description: t.description || '' })),
         enabled: m.enabled, permissions: m.permissions,
         status: { ...m.status, phase },
       };
@@ -63,11 +68,13 @@ export class McpRegistryController {
     return this.mcp.listDeleted();
   }
 
+  @RequireAdmin()
   @Post('deleted/:dirName/restore')
   restore(@Param('dirName') dirName: string) {
     return this.mcp.restore(dirName);
   }
 
+  @RequireAdmin()
   @Delete('deleted/:dirName')
   purge(@Param('dirName') dirName: string) {
     return this.mcp.purge(dirName);
@@ -76,11 +83,21 @@ export class McpRegistryController {
   // ===== CRUD =====
 
   @Get(':name')
-  getDetail(@Param('name') name: string) {
+  async getDetail(@Param('name') name: string, @Req() req: any) {
+    const p = this.principalOf(req);
     const m = this.mcp.get(name);
-    return m || { error: 'Not found' };
+    if (!m) return { error: 'Not found' };
+    // P1：不可见 → 404 语义；非 admin 脱敏 handlerCode（源代码不下发）
+    if (!p.permissions.includes('sys:admin')) {
+      const allowed = await this.mcp.getAllForPrincipal(p);
+      if (!allowed.some(x => x.name === name)) return { error: 'Not found' };
+      const { handlerCode, ...safe } = m;
+      return safe;
+    }
+    return m;
   }
 
+  @RequireAdmin()
   @Patch(':name')
   toggle(@Param('name') name: string, @Body() body: { enabled?: boolean }) {
     if (body.enabled === undefined) return { error: 'No update provided' };
@@ -88,11 +105,13 @@ export class McpRegistryController {
     return ok ? { success: true, name, enabled: body.enabled } : { error: 'Not found' };
   }
 
+  @RequireAdmin()
   @Put(':name/llm-hint')
   setLlmHint(@Param('name') name: string, @Body() body: { llmHint: string }) {
     return this.mcp.setLlmHint(name, body.llmHint) ? { success: true } : { error: 'Not found' };
   }
 
+  @RequireAdmin()
   @Put(':name/permissions')
   setPermissions(@Param('name') name: string, @Body() perms: { allowedRoles?: string[]; allowedUsers?: string[] }) {
     return this.mcp.setPermissions(name, perms) ? { success: true } : { error: 'Not found' };
@@ -104,12 +123,14 @@ export class McpRegistryController {
     return yaml ? { name, manifest: yaml } : { error: 'Not found' };
   }
 
+  @RequireAdmin()
   @Get(':name/handler')
   getHandler(@Param('name') name: string) {
     const handler = this.mcp.getHandler(name);
     return handler !== null ? { handler } : { error: 'Not found' };
   }
 
+  @RequireAdmin()
   @Put(':name/handler')
   saveHandler(@Param('name') name: string, @Body() body: { handler: string }) {
     return this.mcp.saveHandler(name, body.handler) ? { success: true } : { error: 'Not found' };
@@ -152,6 +173,7 @@ export class McpRegistryController {
     return { content: fs.readFileSync(filePath, 'utf-8') };
   }
 
+  @RequireAdmin()
   @Put(':name/schema-files/:file')
   saveSchemaFile(@Param('name') name: string, @Param('file') file: string, @Body() body: { content: string }) {
     const m = this.mcp.get(name);
@@ -163,6 +185,7 @@ export class McpRegistryController {
     return { success: true };
   }
 
+  @RequireAdmin()
   @Post(':name/refresh-schema')
   async refreshSchema(@Param('name') name: string) {
     const m = this.mcp.get(name);
@@ -173,6 +196,7 @@ export class McpRegistryController {
     return this.mcp.refreshSchema(name, creds);
   }
 
+  @RequireAdmin()
   @Delete(':name')
   async deleteMcp(@Param('name') name: string) {
     const result = this.mcp.delete(name);
@@ -213,12 +237,14 @@ export class McpRegistryController {
 
   // ===== Registration =====
 
+  @RequireAdmin()
   @Post('register')
   register(@Body() body: { manifest: string }) {
     if (!body.manifest) return { error: '请提供 manifest YAML 内容' };
     return this.mcp.register(body.manifest);
   }
 
+  @RequireAdmin()
   @Post('reload')
   reload() {
     this.mcp.loadAll();

@@ -3,6 +3,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useI18n } from '@/i18n';
 import { useMessageDisplay } from '@/hooks/useMessageDisplay';
+import { useAuth } from '@/hooks/useAuth';
+import ScopeBadge from '@/components/authz/ScopeBadge';
+import GrantEditor from '@/components/authz/GrantEditor';
 import dynamic from 'next/dynamic';
 
 const MonacoEditor = dynamic(() => import('@monaco-editor/react'), { ssr: false });
@@ -44,6 +47,7 @@ const PANEL_OPTION_KEYS = [
 interface AgentDef {
   id: string; name: string; icon: string; description: string;
   modelLevel: string; builtin: boolean; soul: string; tools: string[];
+  scope?: 'global' | 'user'; ownerUserId?: string; canEdit?: boolean;
   defaultPanel?: string;
   messageDisplay?: { toolProcess?: boolean; toolResult?: boolean; sourceRef?: boolean };
   resolvedTools?: string[];
@@ -52,6 +56,9 @@ interface AgentDef {
 
 export default function AgentManagerPanel() {
   const { t } = useI18n();
+  const { user } = useAuth();
+  const isAdmin = typeof user?.role === 'object' && !!user?.role?.permissions?.includes('sys:admin');
+  const [grantTarget, setGrantTarget] = useState<string | null>(null);
   const { global: msgGlobal, reload: reloadMsgDisplay } = useMessageDisplay();
   const [agents, setAgents] = useState<AgentDef[]>([]);
   const [availableTools, setAvailableTools] = useState<ToolCatalogItem[]>([]);
@@ -62,12 +69,12 @@ export default function AgentManagerPanel() {
   const [msg, setMsg] = useState('');
 
   const loadAgents = useCallback(async () => {
-    const list = await fetch(`${MAIN_URL}/api/agents`).then(r => r.json()).catch(() => []);
+    const list = await fetch(`${MAIN_URL}/api/agents`, { headers: authHeaders() }).then(r => r.json()).catch(() => []);
     if (Array.isArray(list)) setAgents(list);
   }, []);
 
   const loadTools = useCallback(async () => {
-    const tools = await fetch(`${MAIN_URL}/api/agents/available-tools`).then(r => r.json()).catch(() => []);
+    const tools = await fetch(`${MAIN_URL}/api/agents/available-tools`, { headers: authHeaders() }).then(r => r.json()).catch(() => []);
     if (Array.isArray(tools)) setAvailableTools(tools);
   }, []);
 
@@ -145,9 +152,21 @@ export default function AgentManagerPanel() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-1">
                     <span className="text-sm font-medium text-gray-800 truncate">{a.name}</span>
+                    <ScopeBadge scope={a.scope} />
                     {a.sourceApp && (
                       <span className="text-[9px] px-1 py-0.5 rounded font-medium bg-indigo-50 text-indigo-600 truncate max-w-[72px] shrink-0" title={a.sourceApp.name}>
                         {a.sourceApp.name}
+                      </span>
+                    )}
+                    {(isAdmin ? a.scope === 'global' : (a.scope === 'user' && a.ownerUserId === user?.id)) && (
+                      <span
+                        role="button" tabIndex={0}
+                        onClick={e => { e.stopPropagation(); setGrantTarget(a.id); }}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.stopPropagation(); setGrantTarget(a.id); } }}
+                        className="text-[9px] px-1 py-0.5 rounded font-medium bg-indigo-600 text-white cursor-pointer hover:bg-indigo-700 shrink-0"
+                        title={isAdmin ? '授权' : '分享'}
+                      >
+                        {isAdmin ? '授权' : '分享'}
                       </span>
                     )}
                   </div>
@@ -159,6 +178,10 @@ export default function AgentManagerPanel() {
           ))}
         </div>
       </div>
+
+      {grantTarget && (
+        <GrantEditor resourceType="agent" resourceId={grantTarget} onClose={() => setGrantTarget(null)} onSaved={loadAgents} />
+      )}
 
       {/* Right */}
       <div className="flex-1 flex flex-col overflow-hidden">

@@ -1,5 +1,6 @@
 import { Controller, Get, Put, Body, Req } from '@nestjs/common';
 import { MessageDisplayService, MessageDisplayConfig } from './message-display.service';
+import { createUserPrincipal } from '../../../platform/app-store/runtime/invocation-principal';
 
 @Controller('api/message-display')
 export class MessageDisplayController {
@@ -7,7 +8,10 @@ export class MessageDisplayController {
 
   @Get()
   async getConfig(@Req() req: any) {
-    return this.service.getFullConfig(req.user?.id);
+    return this.service.getFullConfig(
+      req.user?.id,
+      req.user ? createUserPrincipal(req.user, 'http:message-display') : undefined,
+    );
   }
 
   @Put('global')

@@ -43,6 +43,8 @@ export interface AppPanelSpec {
   agentId?: string;
   keepAlive?: boolean;
   messageSchema?: string;
+  /** P4 移动端声明（manifest panels[].mobile 原样存 JSONB） */
+  mobile?: { supported: boolean; entryComponent?: string; layout?: 'full' | 'sheet' };
 }
 
 @Injectable()
@@ -97,6 +99,7 @@ export class PanelService implements OnModuleInit {
                 p.entry_component as "entryComponent",
                 p.keep_alive as "keepAlive",
                 p.message_schema as "messageSchema",
+                p.mobile_config as "mobile",
                 a.version as "appVersion",
                 COALESCE(us.visible, TRUE) as "visible",
                 COALESCE(us.group_name, '') as "groupName",
@@ -106,18 +109,35 @@ export class PanelService implements OnModuleInit {
                 g.level AS "grantRole"
          FROM jz_panels p
          LEFT JOIN jz_user_sidebar us ON us.panel_id = p.id AND us.user_id = $1
+         -- P1 T1.10：双表判定——旧 jz_app_grants UNION ALL 新 jz_resource_grants(resource_type='panel')
+         -- sub_id 语义：'' = 整面板授权；非空 = 该面板某 permission 条目授权
          LEFT JOIN LATERAL (
-           SELECT g2.level FROM jz_app_grants g2
-           WHERE g2.app_id = p.source_app_id
-             AND g2.level != 'none'
-             AND (p.permission IS NULL OR g2.permission_id = p.permission)
-             AND (
-               (g2.target_type = 'user' AND g2.target_id = $1)
-               OR (g2.target_type = 'role' AND g2.target_id IN (SELECT u.role_id FROM jz_users u WHERE u.id = $1))
-               OR (g2.target_type = 'department' AND g2.target_id IN (
-                 SELECT dm.department_id FROM jz_department_members dm WHERE dm.user_id = $1
-               ))
-             )
+           SELECT g2.level FROM (
+             SELECT g.level FROM jz_app_grants g
+             WHERE g.app_id = p.source_app_id
+               AND g.level != 'none'
+               AND (p.permission IS NULL OR g.permission_id = p.permission)
+               AND (
+                 (g.target_type = 'user' AND g.target_id = $1)
+                 OR (g.target_type = 'role' AND g.target_id IN (SELECT u.role_id FROM jz_users u WHERE u.id = $1))
+                 OR (g.target_type = 'department' AND g.target_id IN (
+                   SELECT dm.department_id FROM jz_department_members dm WHERE dm.user_id = $1
+                 ))
+               )
+             UNION ALL
+             SELECT rg.level FROM jz_resource_grants rg
+             WHERE rg.resource_type = 'panel'
+               AND rg.resource_id = p.id
+               AND rg.level != 'none'
+               AND (rg.sub_id = '' OR p.permission IS NULL OR rg.sub_id = p.permission)
+               AND (
+                 (rg.target_type = 'user' AND rg.target_id = $1)
+                 OR (rg.target_type = 'role' AND rg.target_id IN (SELECT u.role_id FROM jz_users u WHERE u.id = $1))
+                 OR (rg.target_type = 'department' AND rg.target_id IN (
+                   SELECT dm.department_id FROM jz_department_members dm WHERE dm.user_id = $1
+                 ))
+               )
+           ) g2
            LIMIT 1
          ) g ON TRUE
          LEFT JOIN jz_installed_apps a ON a.app_id = p.source_app_id
@@ -144,18 +164,35 @@ export class PanelService implements OnModuleInit {
                 g.level AS "grantRole"
          FROM jz_panels p
          LEFT JOIN jz_user_sidebar us ON us.panel_id = p.id AND us.user_id = $1
+         -- P1 T1.10：双表判定——旧 jz_app_grants UNION ALL 新 jz_resource_grants(resource_type='panel')
+         -- sub_id 语义：'' = 整面板授权；非空 = 该面板某 permission 条目授权
          LEFT JOIN LATERAL (
-           SELECT g2.level FROM jz_app_grants g2
-           WHERE g2.app_id = p.source_app_id
-             AND g2.level != 'none'
-             AND (p.permission IS NULL OR g2.permission_id = p.permission)
-             AND (
-               (g2.target_type = 'user' AND g2.target_id = $1)
-               OR (g2.target_type = 'role' AND g2.target_id IN (SELECT u.role_id FROM jz_users u WHERE u.id = $1))
-               OR (g2.target_type = 'department' AND g2.target_id IN (
-                 SELECT dm.department_id FROM jz_department_members dm WHERE dm.user_id = $1
-               ))
-             )
+           SELECT g2.level FROM (
+             SELECT g.level FROM jz_app_grants g
+             WHERE g.app_id = p.source_app_id
+               AND g.level != 'none'
+               AND (p.permission IS NULL OR g.permission_id = p.permission)
+               AND (
+                 (g.target_type = 'user' AND g.target_id = $1)
+                 OR (g.target_type = 'role' AND g.target_id IN (SELECT u.role_id FROM jz_users u WHERE u.id = $1))
+                 OR (g.target_type = 'department' AND g.target_id IN (
+                   SELECT dm.department_id FROM jz_department_members dm WHERE dm.user_id = $1
+                 ))
+               )
+             UNION ALL
+             SELECT rg.level FROM jz_resource_grants rg
+             WHERE rg.resource_type = 'panel'
+               AND rg.resource_id = p.id
+               AND rg.level != 'none'
+               AND (rg.sub_id = '' OR p.permission IS NULL OR rg.sub_id = p.permission)
+               AND (
+                 (rg.target_type = 'user' AND rg.target_id = $1)
+                 OR (rg.target_type = 'role' AND rg.target_id IN (SELECT u.role_id FROM jz_users u WHERE u.id = $1))
+                 OR (rg.target_type = 'department' AND rg.target_id IN (
+                   SELECT dm.department_id FROM jz_department_members dm WHERE dm.user_id = $1
+                 ))
+               )
+           ) g2
            LIMIT 1
          ) g ON TRUE
          ORDER BY COALESCE(us.sort_order, p.sort_order)`,
@@ -189,6 +226,7 @@ export class PanelService implements OnModuleInit {
         entryComponent: r.entryComponent ?? undefined,
         keepAlive: !!r.keepAlive,
         messageSchema: r.messageSchema ?? undefined,
+        mobile: r.mobile ? (typeof r.mobile === 'string' ? JSON.parse(r.mobile) : r.mobile) : undefined,
         appVersion: r.appVersion ?? undefined,
       }));
   }
@@ -210,11 +248,13 @@ export class PanelService implements OnModuleInit {
     await this.db.query(
       `INSERT INTO jz_panels
          (id, name, icon, permission, is_builtin, sort_order, category,
-          source_app_id, agent_id, uninstallable, entry_component, name_i18n, keep_alive, message_schema)
-       VALUES ($1,$2,$3,$4,FALSE,$5,'third_party',$6,$7,TRUE,$8,$9,$10,$11)
+          source_app_id, agent_id, uninstallable, entry_component, name_i18n, keep_alive, message_schema,
+          mobile_config)
+       VALUES ($1,$2,$3,$4,FALSE,$5,'third_party',$6,$7,TRUE,$8,$9,$10,$11,$12)
        ON CONFLICT (id) DO UPDATE SET
          name=$2, icon=$3, permission=$4, sort_order=$5,
-         source_app_id=$6, agent_id=$7, entry_component=$8, name_i18n=$9, keep_alive=$10, message_schema=$11`,
+         source_app_id=$6, agent_id=$7, entry_component=$8, name_i18n=$9, keep_alive=$10, message_schema=$11,
+         mobile_config=$12`,
       [
         panel.id, nameZh,
         panel.icon ?? '',
@@ -226,6 +266,7 @@ export class PanelService implements OnModuleInit {
         JSON.stringify(panel.name),
         panel.keepAlive ?? false,
         panel.messageSchema ?? null,
+        panel.mobile ? JSON.stringify(panel.mobile) : null,
       ],
     );
   }

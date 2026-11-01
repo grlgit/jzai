@@ -16,6 +16,12 @@ const panelSchema = z.object({
   agentId: z.string().optional(),
   messageSchema: z.string().optional(),
   keepAlive: z.boolean().optional(),
+  // P4 移动端：supported 必须显式声明（不做自动降级——PC 布局面板硬上移动端会错乱，宁可不显示）
+  mobile: z.object({
+    supported: z.boolean().default(false),
+    entryComponent: z.string().optional(),   // 缺省复用 PC entryComponent
+    layout: z.enum(['full', 'sheet']).optional(),  // full=全屏接管, sheet=底部抽屉
+  }).optional(),
 });
 
 const migrationEntrySchema = z.object({

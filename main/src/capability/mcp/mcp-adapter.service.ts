@@ -42,9 +42,10 @@ export class McpAdapterService implements ToolProvider {
       for (const t of m.tools) {
         const hasBoundServiceCapability = principal?.type === 'service'
           && principalHasScope(principal, `mcp:${m.name}:${t.name}:invoke`);
-        const canInvoke = () => hasBoundServiceCapability
-          || this.mcpRegistry.isAllowedForUser(m.name, userId, roleIds);
-        if (!canInvoke()) continue;
+        // isAllowedForUser 已 @deprecated 并改为 async（P1 委托 canView）
+        const canInvoke = async () => hasBoundServiceCapability
+          || await this.mcpRegistry.isAllowedForUser(m.name, userId, roleIds, principal);
+        if (!(await canInvoke())) continue;
         const paramProps: Record<string, any> = {};
         if (t.inputSchema?.properties) {
           for (const [k, def] of Object.entries(t.inputSchema.properties as Record<string, any>)) {
@@ -62,7 +63,7 @@ export class McpAdapterService implements ToolProvider {
           description: m.llmHint ? `${t.description}\n\n## 调用说明\n${m.llmHint}` : t.description,
           parameters: Type.Object(paramProps) as any,
           execute: async (_id: string, args: Record<string, any>) => {
-            if ((principal && principalIsExpired(principal)) || !canInvoke()) {
+            if ((principal && principalIsExpired(principal)) || !(await canInvoke())) {
               return {
                 content: [{ type: 'text' as const, text: `Forbidden: no access to MCP ${m.name}` }],
                 details: { __error: { code: 'FORBIDDEN', message: `No access to MCP ${m.name}` } },

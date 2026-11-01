@@ -47,6 +47,8 @@ export interface ToolInstance {
   description: string;
   parameters: any;
   execute: (...args: any[]) => Promise<any>;
+  /** P2：工具声明了 confirm 表单（tool-adapter 标记；scheduler skip_tool 模式在 buildForAgent 阶段剔除） */
+  confirm?: boolean;
 }
 
 /** DI injection token for multi-provider collection */

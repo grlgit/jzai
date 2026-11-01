@@ -9,6 +9,7 @@ import { UserModule } from '../../user/user.module';
 import { ModelRouterModule } from '../../model-router/model-router.module';
 import { WorkspaceModule } from '../../workspace/workspace.module';
 import { KnowledgeModule } from '../../knowledge/knowledge.module';
+import { AuthzModule } from '../../platform/authz/authz.module';
 
 /**
  * ChatSupportModule — exports shared support services that other domains need.
@@ -16,7 +17,7 @@ import { KnowledgeModule } from '../../knowledge/knowledge.module';
  * but ChatModule imports CapabilityModule.
  */
 @Module({
-  imports: [DbModule, UserModule, ModelRouterModule, WorkspaceModule, KnowledgeModule],
+  imports: [DbModule, UserModule, ModelRouterModule, WorkspaceModule, KnowledgeModule, AuthzModule],
   providers: [AgentPoolService, SessionService, ConfirmationBridgeService, ContextManagerService, AgentRegistryService],
   exports: [AgentPoolService, SessionService, ConfirmationBridgeService, ContextManagerService, AgentRegistryService],
 })

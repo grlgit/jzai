@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 import { SkillRegistryService, SkillDefinition } from './skill-registry.service';
 
 export interface DiscoveredApi {
@@ -77,7 +78,7 @@ export class SkillDiscoveryService {
     credentials?: { username: string; password: string };
     navigationSteps: string[];  // e.g. ["全部功能", "ERP", "订单管理", "新增大货订单"]
     skillName: string;
-  }): Promise<DiscoveryResult> {
+  }, actor?: InvocationPrincipal): Promise<DiscoveryResult> {
     const { chromium } = await import('playwright');
     if (!this.browser) {
       this.browser = await chromium.launch({ headless: true });
@@ -242,7 +243,7 @@ export class SkillDiscoveryService {
       );
 
       // Auto-generate skill from discovery
-      this.generateSkill(params.skillName, params.systemName, result);
+      await this.generateSkill(params.skillName, params.systemName, result, actor);
 
       return result;
     } finally {
@@ -602,7 +603,7 @@ export class SkillDiscoveryService {
   /**
    * Generate skill definition from discovery result
    */
-  private generateSkill(skillName: string, systemName: string, result: DiscoveryResult) {
+  private async generateSkill(skillName: string, systemName: string, result: DiscoveryResult, actor?: InvocationPrincipal) {
     // Determine the submit API URL with priority:
     // 1. formAction discovered from ExtJS/HTML form
     // 2. Captured POST API matching save/create/submit pattern
@@ -669,7 +670,7 @@ export class SkillDiscoveryService {
     // Generate handler code
     const handlerCode = this.generateHandler(skill, result);
 
-    this.registry.save(skill, handlerCode);
+    await this.registry.save(skill, handlerCode, actor);
     this.logger.log(`Generated skill: ${skillName}`);
   }
 

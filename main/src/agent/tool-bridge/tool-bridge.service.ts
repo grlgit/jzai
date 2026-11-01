@@ -15,6 +15,8 @@ import {
 import { classifyError, formatToolError } from './tool-error';
 import { McpRegistryService } from '../../capability/mcp/mcp-registry.service';
 import { CompanionServiceManager } from '../../platform/app-store/runtime/companion-service.manager';
+import { ResourceAccessService } from '../../platform/authz/resource-access.service';
+import { ResourceGrantService } from '../../platform/authz/resource-grant.service';
 
 /**
  * ToolBridgeService — collects all ToolProviders and builds tool sets for agents.
@@ -39,6 +41,8 @@ export class ToolBridgeService {
     @Optional() private readonly connectionBindings?: AppConnectionBindingService,
     @Optional() private readonly mcpRegistry?: McpRegistryService,
     @Optional() private readonly companionManager?: CompanionServiceManager,
+    @Optional() private readonly authzAccess?: ResourceAccessService,
+    @Optional() private readonly authzGrants?: ResourceGrantService,
   ) {
     for (const p of (this.providers || [])) {
       for (const id of p.toolIds) {
@@ -202,8 +206,107 @@ export class ToolBridgeService {
       }
     }
 
+    // P2 运行期兜底：connector/sub-tool 双层过滤（YAML 写死 mcp:x 也封死；system principal 跳过）
+    let authzFiltered = await this.filterByConnectorAuthz(deduped, principal);
+
+    // P2 scheduler skip_tool：无人值守下剔除声明 confirm 的工具（LLM 看不到，不会发起确认请求）
+    if (principal && principal.origin === 'scheduler' && principal.scopes.includes('confirm:skip_tool')) {
+      const before = authzFiltered.length;
+      authzFiltered = authzFiltered.filter(t => !t.confirm);
+      const removed = before - authzFiltered.length;
+      if (removed > 0) this.logger.log(`P2 scheduler skip_tool: 剔除 ${removed} 个 confirm 工具（${principal.principalId}）`);
+    }
+
     // Global safety wrapper: auth + truncation + error catch
-    return this.wrapWithSafety(deduped, principal, maxToolOutputChars);
+    return this.wrapWithSafety(authzFiltered, principal, maxToolOutputChars);
+  }
+
+  /**
+   * P1 buildForAgent 兜底过滤：对解析出的 workspace 连接类工具做
+   * 第一层 canView(connector/tool) + 第二层 per-tool visibleSubIds 过滤。
+   * 名称按 mcp 注册表已知连接名最长前缀切分（防止连接名含下划线误切）。
+   * 剔除项 warn（T1.9 要求）。AUTHZ_ENFORCE=0 或未接线 → 原样返回。
+   */
+  private async filterByConnectorAuthz(tools: ToolInstance[], principal: InvocationPrincipal | undefined): Promise<ToolInstance[]> {
+    const access = this.authzAccess;
+    if (!access || !access.isEnforced()) return tools;
+    if (!principal) return tools; // legacy 无身份上下文，无法判定，保持旧行为
+    if (access.isSystemPrincipal(principal)) return tools;
+    if (principal.permissions.includes('sys:admin')) return tools;
+
+    const mapped = tools.map(t => {
+      const mcp = this.splitMcpToolName(t.name);
+      if (mcp) return { tool: t, kind: 'connector' as const, resId: mcp.conn, subId: mcp.tool };
+      if (t.name.startsWith('tool_') && this.toolRegistryHas(t.name.slice(5))) {
+        return { tool: t, kind: 'tool' as const, resId: t.name.slice(5) };
+      }
+      return { tool: t, kind: 'other' as const };
+    });
+
+    const connNames = [...new Set(mapped.filter(m => m.kind === 'connector').map(m => m.resId))];
+    const toolNames = [...new Set(mapped.filter(m => m.kind === 'tool').map(m => m.resId))];
+    const [visibleConnList, visibleToolList] = await Promise.all([
+      access.filterVisible('connector', connNames, x => x, principal),
+      access.filterVisible('tool', toolNames, x => x, principal),
+    ]);
+    const visibleConns = new Set(visibleConnList);
+    const visibleTools = new Set(visibleToolList);
+
+    // per-conn 缓存防 N+1：仅当用户持有该连接的 grant 时才施加 sub-tool 过滤
+    //（default_visibility='all'/owner 可见的连接无子授权概念，全部子工具放行）
+    const grantCache = new Map<string, boolean>();
+    const subCache = new Map<string, Set<string> | null>();
+    const hasAnyGrant = async (conn: string) => {
+      if (!this.authzGrants) return false;
+      if (!grantCache.has(conn)) grantCache.set(conn, await this.authzGrants.hasGrant('connector', conn, principal));
+      return grantCache.get(conn)!;
+    };
+    const visibleSubs = async (conn: string) => {
+      if (!subCache.has(conn)) subCache.set(conn, await this.authzGrants!.visibleSubIds('connector', conn, principal));
+      return subCache.get(conn)!;
+    };
+
+    const kept: ToolInstance[] = [];
+    for (const m of mapped) {
+      if (m.kind === 'other') { kept.push(m.tool); continue; }
+      if (m.kind === 'tool') {
+        if (visibleTools.has(m.resId)) kept.push(m.tool);
+        else this.logger.warn(`P1 authz: 剔除未授权工具 tool:${m.resId}（${principal.userId ?? principal.principalId}）`);
+        continue;
+      }
+      if (!visibleConns.has(m.resId)) {
+        this.logger.warn(`P1 authz: 剔除未授权连接 mcp:${m.resId} 的工具 ${m.tool.name}（${principal.userId ?? principal.principalId}）`);
+        continue;
+      }
+      if (m.subId && await hasAnyGrant(m.resId)) {
+        const subs = await visibleSubs(m.resId);
+        if (subs !== null && !subs.has(m.subId)) {
+          this.logger.warn(`P1 authz: 剔除未授权子工具 mcp:${m.resId}/${m.subId}（${principal.userId ?? principal.principalId}）`);
+          continue;
+        }
+      }
+      kept.push(m.tool);
+    }
+    return kept;
+  }
+
+  /** mcp_<conn>_<tool> 切分：用注册表已知连接名做最长前缀匹配 */
+  private splitMcpToolName(name: string): { conn: string; tool: string } | null {
+    if (!this.mcpRegistry || !name.startsWith('mcp_')) return null;
+    const conns = this.mcpRegistry.getAll().map(m => m.name);
+    let best: string | null = null;
+    for (const conn of conns) {
+      if (name.startsWith(`mcp_${conn}_`) && (best === null || conn.length > best.length)) best = conn;
+    }
+    if (!best) return null;
+    return { conn: best, tool: name.slice(`mcp_${best}_`.length) };
+  }
+
+  /** tool_<name> 是否来自 workspace 工具注册表（区分内置/动态 provider 的同名工具） */
+  private toolRegistryHas(name: string): boolean {
+    // 经 mcpRegistry 之外的注册表不可直接访问；用 provider 形态保守判定：
+    // 仅当 'tools' provider 存在时认为 tool_: 前缀工具可能来自 workspace 注册表。
+    return this.providerMap.has('tools');
   }
 
   /** Get catalog for settings UI */

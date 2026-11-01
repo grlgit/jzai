@@ -34,6 +34,7 @@
     "@nestjs/passport": "^11.0.5",
     "@nestjs/platform-express": "^11.1.24",
     "@nestjs/platform-socket.io": "^11.1.23",
+    "@nestjs/schedule": "^12.0.2",
     "@nestjs/throttler": "^6.5.0",
     "@nestjs/websockets": "^11.1.23",
     "@sinclair/typebox": "^0.34.49",
@@ -44,6 +45,7 @@
     "cheerio": "^1.2.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "cron": "^4.4.0",
     "dxf": "^5.3.1",
     "echarts": "^6.1.0",
     "exceljs": "^4.4.0",
@@ -128,6 +130,10 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "transformIgnorePatterns": [
+      "node_modules/(?!(@nestjs/schedule|cron)/)"
+    ],
+    "forceExit": true
   }
 }

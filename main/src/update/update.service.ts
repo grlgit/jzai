@@ -91,11 +91,28 @@ export class UpdateService {
         if (fs.existsSync(p)) {
           this.currentVersion = JSON.parse(fs.readFileSync(p, 'utf8'));
           this.logger.log(`Version: ${this.currentVersion!.version} (${p})`);
+          // OTA 诊断：标记与版本一致性（标记 version ≠ version.json version = 部分重建/写坏）
+          try {
+            const markerPath = path.join(path.dirname(p), '.ota-applied');
+            if (fs.existsSync(markerPath)) {
+              const mk = JSON.parse(fs.readFileSync(markerPath, 'utf8'));
+              if (mk.version !== this.currentVersion!.version) {
+                this.logger.warn(`[OTA] 异常: .ota-applied 标记版本 ${mk.version} ≠ version.json ${this.currentVersion!.version}——疑似容器重建或升级中断`);
+              } else {
+                this.logger.log(`[OTA] 上次 OTA 应用记录: ${mk.version} @ ${mk.at}`);
+              }
+            }
+          } catch { /* marker 诊断失败不影响启动 */ }
           return;
         }
       } catch { /* continue */ }
     }
     this.logger.warn('version.json not found, version unknown');
+    // OTA 诊断：曾应用过 OTA 但 version.json 消失 = 容器被重建（compose down/up），OTA 成果已丢失
+    const marker = path.join(process.cwd(), '.ota-applied');
+    if (fs.existsSync(marker)) {
+      this.logger.warn(`[OTA] 异常: 存在 .ota-applied 标记但 version.json 缺失！标记内容: ${fs.readFileSync(marker, 'utf8')}`);
+    }
   }
 
   getCurrentVersion(): VersionInfo | null { return this.currentVersion; }
@@ -237,6 +254,8 @@ export class UpdateService {
     const version = update.version!;
     const tmpDir = path.join('/tmp', `upgrade-${version}`);
     const appDir = path.resolve(process.cwd(), '..');
+    // OTA 诊断日志：完整记录升级链路关键节点（客户现场排查"升级后版本未变"等问题时依赖）
+    this.logger.log(`[OTA] ═══ 开始升级: ${this.getVersionString()} → ${version} (cwd=${process.cwd()}, appDir=${appDir}) ═══`);
     // 差量可用前提：服务端 delta.base 必须 == 当前安装版本（逐跳、不跳版）
     const delta = update.delta && update.delta.base === this.getVersionString() ? update.delta : null;
     const { execSync } = await import('child_process');
@@ -262,6 +281,8 @@ export class UpdateService {
           const tar = path.join(tmpDir, `${comp}.tar.gz`);
           fs.writeFileSync(tar, await this.downloadComponent(version, comp, 'full'));
           steps.push({ comp, tar, deleted: [], kind: 'full' });
+        } else {
+          this.logger.warn(`[OTA] 组件 ${comp} 在本版本中无内容（既无差量也无全量）`);
         }
         if (this.progress.components[comp]) this.progress.components[comp].done = true;
       }
@@ -283,7 +304,19 @@ export class UpdateService {
       // Phase 2: 应用 —— 叠加覆盖 + 删除（与 hotfix 叠加语义一致）
       this.progress.phase = 'installing';
       for (const s of steps) {
-        if (s.tar) execSync(`tar -xzf ${s.tar} -C ${appDir}`, { stdio: 'pipe' });
+        if (s.tar) {
+          // 解压前校验 tar 内路径布局：必须是 main/... 或 web/... 开头，否则叠加到错误位置且静默无错
+          const listing = execSync(`tar -tzf ${s.tar} | head -5`, { encoding: 'utf8' }).trim().split('\n');
+          const expectedPrefix = `${s.comp}/`;
+          const layoutOk = listing.length > 0 && listing.every(l => l.startsWith(expectedPrefix) || l === expectedPrefix);
+          const fileCount = Number(execSync(`tar -tzf ${s.tar} | wc -l`, { encoding: 'utf8' }).trim());
+          this.logger.log(`[OTA][${s.comp}] 解压 ${s.kind} 包: ${fileCount} 个文件, 布局校验=${layoutOk ? 'OK' : '异常: ' + listing.join(', ')}`);
+          if (!layoutOk) throw new Error(`${s.comp} 升级包路径布局异常（期望 ${expectedPrefix}*，实际首项 ${listing[0] || '(空)'}）——未解压，服务保持原状`);
+          execSync(`tar -xzf ${s.tar} -C ${appDir}`, { stdio: 'pipe' });
+          // 解压后抽查关键文件存在性
+          const probe = s.comp === 'main' ? path.join(appDir, 'main', 'dist', 'main.js') : path.join(appDir, 'web', 'server.js');
+          this.logger.log(`[OTA][${s.comp}] 解压完成, 关键文件 ${probe} 存在=${fs.existsSync(probe)}`);
+        }
         for (const rel of s.deleted) {
           const target = path.join(appDir, s.comp, rel);
           if (target.startsWith(path.join(appDir, s.comp) + path.sep)) fs.rmSync(target, { force: true });
@@ -297,16 +330,30 @@ export class UpdateService {
       // 把 version + gitCommit 落到 /app/main/version.json（产物已含 version.json，这里补 gitCommit）
       try {
         const vf = path.join(appDir, 'main', 'version.json');
-        const vj = fs.existsSync(vf) ? JSON.parse(fs.readFileSync(vf, 'utf8') || '{}') : {};
-        vj.version = version;
+        const before = fs.existsSync(vf) ? JSON.parse(fs.readFileSync(vf, 'utf8') || '{}') : {};
+        const vj = { ...before, version };
         if (update.gitCommit) vj.gitCommit = update.gitCommit;
+        vj.otaAppliedAt = new Date().toISOString();
         fs.writeFileSync(vf, JSON.stringify(vj, null, 2));
-      } catch { /* best effort */ }
+        // 写后回读校验：version.json 未生效是"重启后版本未变"的直接嫌疑点之一
+        const readBack = JSON.parse(fs.readFileSync(vf, 'utf8'));
+        if (readBack.version !== version) {
+          throw new Error(`version.json 写后回读校验失败: 期望 ${version}, 实际 ${readBack.version}`);
+        }
+        this.logger.log(`[OTA] version.json 已更新并校验: ${before.version ?? '(无)'} → ${readBack.version}`);
+        // OTA 标记文件：entrypoint 启动时打印——若容器被重建（compose down/up），标记消失即坐实"重建冲掉 OTA"
+        fs.writeFileSync(path.join(appDir, 'main', '.ota-applied'),
+          JSON.stringify({ version, at: vj.otaAppliedAt, gitCommit: update.gitCommit ?? null }));
+      } catch (err: any) {
+        // 不再静默：版本未落盘的升级等于没升，必须让错误冒出来
+        throw new Error(`version.json 落盘失败: ${err.message}`);
+      }
 
       fs.rmSync(tmpDir, { recursive: true, force: true });
       this.progress.phase = 'restarting';
-      this.logger.log(`Update to ${version} applied (delta=${!!delta}, git=${(update.gitCommit || '').slice(0, 9)}), restarting...`);
-      this.restartIfNative(appDir);
+      this.logger.log(`[OTA] ═══ 升级应用完成: → ${version} (delta=${!!delta}, git=${(update.gitCommit || '').slice(0, 9)})，退出进程等待容器重启 ═══`);
+      this.logger.log('[OTA] 注意：重启须用 docker restart / 重启策略；compose down/up 会重建容器并丢失本次 OTA');
+      this.restartIfNative(appDir, version);
       setTimeout(() => process.exit(0), 2000);
 
     } catch (err: any) {
@@ -325,27 +372,32 @@ export class UpdateService {
    * Docker 形态无 run/*.pid（容器入口 wait -n 整组重启），直接跳过。
    * 修复：原生 OTA 只退出 main 导致 web 旧进程引用已删除 chunk（404 白屏）且 main 无人拉起。
    */
-  private restartIfNative(appDir: string): void {
+  private restartIfNative(appDir: string, targetVersion?: string): void {
     const runDir = path.join(appDir, 'run');
-    const nativeLayout = fs.existsSync(path.join(runDir, 'web.pid'))
-      || fs.existsSync(path.join(runDir, 'gateway.pid'));
+    const webPid = fs.existsSync(path.join(runDir, 'web.pid'));
+    const gwPid = fs.existsSync(path.join(runDir, 'gateway.pid'));
+    const nativeLayout = webPid || gwPid;
+    this.logger.log(`[OTA] 重启形态探测: run/web.pid=${webPid} run/gateway.pid=${gwPid} → ${nativeLayout ? '原生（restarter 接管）' : 'Docker/无 pid 文件（依赖外部监督）'}`);
     if (!nativeLayout) return;
     try {
       const restarter = path.join(appDir, 'main', 'dist', 'update', 'native-restarter.js');
       if (!fs.existsSync(restarter)) {
-        this.logger.warn(`[OTA] native restarter 缺失: ${restarter}（请手动 bash stop.sh && bash start.sh）`);
+        // restarter 缺失 = main 退出后无人拉起 = 服务直接停——必须显式报出
+        this.logger.error(`[OTA] native restarter 缺失: ${restarter}——本次 main 退出后服务将不可用，请手动 bash stop.sh && bash start.sh`);
         return;
       }
-      const out = fs.openSync(path.join(runDir, 'restart.log'), 'a');
-      const child = spawn(process.execPath, [restarter, appDir, String(process.pid)], {
+      const restartLog = path.join(runDir, 'restart.log');
+      const out = fs.openSync(restartLog, 'a');
+      const child = spawn(process.execPath, [restarter, appDir, String(process.pid), targetVersion ?? ''], {
         detached: true,
         windowsHide: true,
         stdio: ['ignore', out, out],
       });
+      child.on('error', (e) => this.logger.error(`[OTA] restarter 进程异常: ${e.message}（日志 ${restartLog}）`));
       child.unref();
-      this.logger.log(`[OTA] 原生布局，restarter 已接管重启 (pid ${child.pid})`);
+      this.logger.log(`[OTA] 原生布局，restarter 已接管重启 (pid ${child.pid}，目标版本 ${targetVersion ?? '未知'}，日志 ${restartLog})`);
     } catch (err: any) {
-      this.logger.warn(`[OTA] restarter 启动失败: ${err.message}（请手动 bash stop.sh && bash start.sh）`);
+      this.logger.error(`[OTA] restarter 启动失败: ${err.message}（请手动 bash stop.sh && bash start.sh）`);
     }
   }
 
@@ -441,10 +493,12 @@ export class UpdateService {
           const vj = fs.existsSync(vf) ? JSON.parse(fs.readFileSync(vf, 'utf8') || '{}') : {};
           vj.version = step.version;
           if (step.gitCommit) vj.gitCommit = step.gitCommit;
+          vj.otaAppliedAt = new Date().toISOString();
           fs.writeFileSync(vf, JSON.stringify(vj, null, 2));
-          this.logger.log(`Version updated to ${step.version}`);
-        } catch (e) {
-          this.logger.warn(`Failed to update version.json: ${e}`);
+          const readBack = JSON.parse(fs.readFileSync(vf, 'utf8'));
+          this.logger.log(`[OTA] version.json → ${step.version}（回读校验=${readBack.version === step.version ? 'OK' : '不一致!'}）`);
+        } catch (e: any) {
+          this.logger.error(`[OTA] version.json 落盘失败（step ${step.version}）: ${e.message}`);
         }
       }
 
@@ -461,7 +515,7 @@ export class UpdateService {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       this.progress.phase = 'restarting';
       this.logger.log(`Upgrade to ${upgradePath.latest} completed (${upgradePath.steps.length} steps applied), restarting...`);
-      this.restartIfNative(appDir);
+      this.restartIfNative(appDir, upgradePath.latest);
       setTimeout(() => process.exit(0), 2000);
 
     } catch (err: any) {

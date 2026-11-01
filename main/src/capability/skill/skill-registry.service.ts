@@ -1,9 +1,12 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, Optional } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { WorkspaceService } from '../../workspace/workspace.service';
 import { validateNameForTool } from '../../utils/tool-name.validator';
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
+import { ResourceMetaService } from '../../platform/authz/resource-meta.service';
+import { ResourceAccessService } from '../../platform/authz/resource-access.service';
 
 // === Agent Skills Standard (agentskills.io/specification) ===
 
@@ -21,6 +24,10 @@ export interface SkillDefinition {
   hasHandler: boolean;                   // scripts/handler.ts 存在
   hasReferences: boolean;                // references/ 目录存在
   hasAssets: boolean;                    // assets/ 目录存在
+  // ── P1 运行期字段（meta join 得出，不落 SKILL.md）──
+  scope?: 'global' | 'user';
+  ownerUserId?: string;
+  canEdit?: boolean;
 }
 
 @Injectable()
@@ -29,7 +36,12 @@ export class SkillRegistryService {
   private readonly skillsDir: string;
   private skills = new Map<string, SkillDefinition>();
 
-  constructor(private readonly workspace: WorkspaceService) {
+  constructor(
+    private readonly workspace: WorkspaceService,
+    // P1：可选注入——authz 未接线（测试直构）时保持旧行为
+    @Optional() private readonly meta?: ResourceMetaService,
+    @Optional() private readonly access?: ResourceAccessService,
+  ) {
     this.skillsDir = path.join(this.workspace.getConfigDir(), 'skills');
     this.loadAll();
   }
@@ -117,6 +129,30 @@ export class SkillRegistryService {
   getAll(): SkillDefinition[] { return Array.from(this.skills.values()); }
   get(name: string): SkillDefinition | undefined { return this.skills.get(name); }
 
+  /** 按 principal 过滤的列表（P1）：visible + scope/ownerUserId/canEdit 注解 */
+  async getAllForPrincipal(p: InvocationPrincipal): Promise<SkillDefinition[]> {
+    if (!this.access) return this.getAll();
+    return this.access.annotateEditable('skill', this.getAll(), s => s.name, p);
+  }
+
+  /**
+   * 分配新技能名（P1）：普通用户强制 `u-{shortUserId}-{slug}` 前缀（资源名与目录同名），
+   * 与内存表/磁盘目录冲突 → 409，不覆盖既有技能。
+   */
+  allocateSkillName(requested: string | undefined, actor?: InvocationPrincipal): string {
+    const slug = (requested || 'skill').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'skill';
+    const isAdmin = !!actor?.permissions.includes('sys:admin');
+    let name = slug;
+    if (!isAdmin && actor?.userId) {
+      const short = actor.userId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8).toLowerCase() || 'u';
+      name = `u-${short}-${slug}`;
+    }
+    if (this.skills.has(name) || fs.existsSync(path.join(this.skillsDir, name))) {
+      throw new ConflictException(`技能名已被占用: ${name}`);
+    }
+    return name;
+  }
+
   /** Aggregate knowledge domains from all skills (or a subset by name). */
   getKnowledgeDomains(skillNames?: string[]): string[] {
     const domains = new Set<string>();
@@ -129,7 +165,9 @@ export class SkillRegistryService {
     return Array.from(domains);
   }
 
-  save(skill: SkillDefinition, handlerCode?: string) {
+  /** 保存技能（P1：async）。新建时若带 actor 且 authz 已接线，写归属 meta（用户→user/自己；admin→global，visibility=none） */
+  async save(skill: SkillDefinition, handlerCode?: string, actor?: InvocationPrincipal) {
+    const isNew = !this.skills.has(skill.name);
     // 验证技能名称是否符合工具命名规范
     try {
       validateNameForTool(skill.name, 'skill_');
@@ -159,10 +197,21 @@ export class SkillRegistryService {
     }
 
     this.skills.set(skill.name, { ...skill, dirName: skill.dirName || skill.name, hasHandler: !!handlerCode || skill.hasHandler });
+    if (isNew && actor && this.meta) {
+      const isAdmin = actor.permissions.includes('sys:admin');
+      await this.meta.upsert({
+        resourceType: 'skill', resourceId: skill.name,
+        scope: isAdmin ? 'global' : 'user',
+        ownerUserId: isAdmin ? undefined : actor.userId,
+        builtin: false, defaultVisibility: 'none',
+        createdBy: actor.userId,
+      });
+    }
     this.logger.log(`Saved skill: ${skill.name}`);
   }
 
-  delete(name: string): boolean {
+  /** 删除（P1：async，连带清理 meta/grants） */
+  async delete(name: string): Promise<boolean> {
     const skill = this.skills.get(name);
     if (!skill) return false;
     const srcDir = path.join(this.skillsDir, skill.dirName);
@@ -171,6 +220,7 @@ export class SkillRegistryService {
     const destDir = path.join(deletedDir, `${skill.dirName}_${Date.now()}`);
     if (fs.existsSync(srcDir)) fs.renameSync(srcDir, destDir);
     this.skills.delete(name);
+    if (this.meta) await this.meta.remove('skill', name);
     this.logger.log(`Deleted skill: ${name}`);
     return true;
   }

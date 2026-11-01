@@ -121,7 +121,11 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
   const tokenRef = useRef(token);
   const lastActivityRef = useRef(0);  // timestamp of last stream/tool/debug event
   const inactivityTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const forceNewRef = useRef(false);  // 用户点"新建会话"后置 true：下一条消息强制开新会话，避免后端复用旧会话致消息累加
+  const forceNewRef = useRef(false);
+  // 会话代际：newSession 递增。attach 探测（chat.attach）发射时记录代际，
+  // 其响应/历史回填只在代际未变时生效——防止点"新建会话"后，先前探测的延迟响应把旧会话带回来。
+  const sessionEpochRef = useRef(0);
+  const attachEpochRef = useRef(0);  // 用户点"新建会话"后置 true：下一条消息强制开新会话，避免后端复用旧会话致消息累加
 
   // Rebuild socket when token changes
   if (token !== tokenRef.current) {
@@ -136,6 +140,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
   /** 重进会话恢复：询问后端该会话是否有进行中的 run，有则快照续流（响应走 chat.attached） */
   const attachSession = useCallback((sid?: string) => {
     if (!socket) return;
+    attachEpochRef.current = sessionEpochRef.current;
     socket.emit('chat.attach', { sessionId: sid, agentId });
   }, [socket, agentId]);
 
@@ -473,6 +478,9 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
         return;
       }
       if (data.conversationId && data.conversationId !== conversationId) return;
+      // 代际守卫：newSession 之后，先前 attach 的响应一律丢弃（旧会话不得回填新会话）
+      if (attachEpochRef.current !== sessionEpochRef.current) return;
+      const attachEpoch = sessionEpochRef.current;
       // 幂等：同一 run 的快照只应用一次（断线重连会重复 attach）
       const sig = `${data.sessionId}:${data.snapshot?.startedAt}:${data.status}:${(data.snapshot?.text || '').length}`;
       if (sig === lastAttachSigRef.current) return;
@@ -482,6 +490,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
       if (sid) setSessionId(sid);
 
       const applySnapshot = () => {
+        if (sessionEpochRef.current !== attachEpoch) return; // 历史拉取期间用户又新建了会话
         if (data.status === 'running') {
           // 续流前记录该 run 的 runId：后续实时事件按 runId 过滤，不记录会被全部丢弃
           if (data.runId) currentRunIdRef.current = data.runId;
@@ -525,6 +534,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
         fetch(`${MAIN_URL}/api/sessions/${sid}/messages`, {
           headers: { 'Authorization': `Bearer ${tokenRef.current}` },
         }).then(r => r.json()).then(msgs => {
+          if (sessionEpochRef.current !== attachEpoch) return;
           if (Array.isArray(msgs) && msgs.length > 0 && messagesRef.current.length === 0) {
             setMessages(msgs.map((m: any) => ({
               id: m.id, role: m.role as 'user' | 'assistant' | 'system', content: m.content,
@@ -688,6 +698,7 @@ export function useChat(conversationId: string, token?: string | null, agentId: 
 
   /** Start a new session (clear messages, reset sessionId) */
   const newSession = useCallback(() => {
+    sessionEpochRef.current++;
     setSessionId(null);
     setMessages([]);
     setDebugEvents([]);

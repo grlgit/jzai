@@ -370,8 +370,9 @@ export class AppValidatorService {
     }
     const mcpExposedProviders = (manifest.backend?.toolProviders ?? []).filter(tp => tp.mcpExposed);
     if (mcpExposedProviders.length > 0 && !isFirstParty) {
-      check(10, 'critical', 'MCP_EXPOSE_NOT_FIRST_PARTY',
-        `mcpExposed requires a first-party appId (com.jianzhi.* / com.menhu.*), got "${manifest.appId}"`);
+      // P3：门控下移至运行期（AppMcpExposeService.isAllowed，须管理员审批后生效），校验器保持纯函数
+      check(10, 'warning', 'MCP_EXPOSE_NOT_FIRST_PARTY',
+        `mcpExposed 须管理员审批后生效（AppMcpExposeService），三方包通过安装校验但默认不对外暴露: "${manifest.appId}"`);
     }
 
     // ── Check 11: Declared agent YAML and tool reference consistency ──
@@ -441,6 +442,11 @@ export class AppValidatorService {
     for (const panel of manifest.panels ?? []) {
       if (!panel.icon) {
         check(14, 'warning', 'PANEL_MISSING_ICON', `Panel "${panel.id}" has no icon`);
+      }
+      // P4：声明 mobile.supported 但 mobile.entryComponent 与 PC entryComponent 均缺失——移动端无处可挂载
+      if (panel.mobile?.supported && !panel.mobile.entryComponent && !panel.entryComponent) {
+        check(14, 'warning', 'MOBILE_ENTRY_MISSING',
+          `Panel "${panel.id}" declares mobile.supported but neither mobile.entryComponent nor entryComponent is set`);
       }
     }
 

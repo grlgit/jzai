@@ -13,6 +13,7 @@ import { AppInstallService } from './services/app-install.service';
 import { AppUninstallService } from './services/app-uninstall.service';
 import { AppUpgradeService } from './services/app-upgrade.service';
 import { AppGrantService } from './services/app-grant.service';
+import { AppMcpExposeService } from './services/app-mcp-expose.service';
 import { AppAssetService } from './services/app-asset.service';
 import { AppAuditService } from './services/app-audit.service';
 import { AppCredentialService } from './services/app-credential.service';
@@ -60,6 +61,7 @@ import { AppServicePrincipalController } from './app-service-principal.controlle
     AppUninstallService,
     AppUpgradeService,
     AppGrantService,
+    AppMcpExposeService,
     AppAssetService,
     AppAuditService,
     AppCredentialService,
@@ -88,6 +90,7 @@ import { AppServicePrincipalController } from './app-service-principal.controlle
     AppPoolService,
     AppInstanceService,
     AppGrantService,
+    AppMcpExposeService,
     AppCredentialService,
     IsolationService,
     DynamicModuleLoader,

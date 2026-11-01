@@ -10,7 +10,10 @@ import { useMessageDisplay } from '@/hooks/useMessageDisplay';
 import OemConsolePanel from '@/components/OemConsolePanel';
 import DevMcpCard from '@/components/DevMcpCard';
 import { useAuth } from '@/hooks/useAuth';
+import GrantEditor from '@/components/authz/GrantEditor';
 import UserManagePanel from '@/components/UserManagePanel';
+import TimerPanel from '@/components/TimerPanel';
+import McpExposePanel from '@/components/McpExposePanel';
 
 import { getMainUrl } from '@/lib/env';
 const MAIN_URL = getMainUrl();
@@ -40,7 +43,7 @@ function authHeaders(): Record<string, string> {
 
 export default function SettingsPanel() {
   const { t } = useI18n();
-  const [activeTab, setActiveTab] = useState<'model' | 'toolMgmt' | 'general' | 'credentials' | 'analytics' | 'oem' | 'users'>('model');
+  const [activeTab, setActiveTab] = useState<'model' | 'toolMgmt' | 'general' | 'credentials' | 'analytics' | 'oem' | 'users' | 'timer'>('model');
   // Note: 'credentials' tab is hidden from the tab bar but still rendered for backward compatibility
   const [toolsSubTab, setToolsSubTab] = useState<'builtin' | 'custom' | 'mcp' | 'email'>('builtin');
   const [generalSubTab, setGeneralSubTab] = useState<'msgDisplay' | 'license' | 'system' | 'shortcuts'>('msgDisplay');
@@ -176,6 +179,7 @@ export default function SettingsPanel() {
 
   // Tool / MCP registries (separate APIs)
   const [customTools, setCustomTools] = useState<any[]>([]);
+  const [grantTarget, setGrantTarget] = useState<{ type: 'connector' | 'tool'; id: string; subIds?: string[] } | null>(null);
   const [mcpServers, setMcpServers] = useState<any[]>([]);
   const [connectorsLoading, setConnectorsLoading] = useState(false);
   const [selectedConnector, setSelectedConnector] = useState<any>(null);
@@ -229,6 +233,8 @@ export default function SettingsPanel() {
 
   // MCP manifest viewer & register
   const [viewingManifest, setViewingManifest] = useState<{ name: string; yaml: string } | null>(null);
+  // MCP 服务详情页签：配置（manifest）/ 权限（permissions）
+  const [mcpDetailTab, setMcpDetailTab] = useState<'config' | 'perm'>('config');
   const [showRegister, setShowRegister] = useState(false);
   const [registerYaml, setRegisterYaml] = useState('');
   const [registerMsg, setRegisterMsg] = useState('');
@@ -388,7 +394,7 @@ export default function SettingsPanel() {
   return (
     <div className="p-6 overflow-y-auto h-full">
       <div className="flex gap-2 mb-6">
-        {([['model', t('settings.models')], ['toolMgmt', '工具管理'], ['credentials', '系统凭证'], ['analytics', '运营分析'], ['oem', '三方扩展'], ['users', '用户与组织'], ['general', '系统通用']] as const).filter(([tab]) => tab !== 'credentials' && (tab !== 'users' || canManageUsers)).map(([tab, label]) => (
+        {([['model', t('settings.models')], ['toolMgmt', '工具管理'], ['timer', '定时任务'], ['credentials', '系统凭证'], ['analytics', '运营分析'], ['oem', '三方扩展'], ['users', '用户与组织'], ['general', '系统通用']] as const).filter(([tab]) => tab !== 'credentials' && (tab !== 'users' || canManageUsers) && (tab !== 'timer' || isSysAdmin)).map(([tab, label]) => (
           <button key={tab} onClick={() => {
             setActiveTab(tab);
             if (tab === 'toolMgmt') {
@@ -668,11 +674,18 @@ export default function SettingsPanel() {
                               detail: { content: `请帮我编辑 Tool "${c.name}"。\n描述: ${c.description || '无'}` },
                             })), 600);
                           }} className="text-xs text-gray-400 hover:text-indigo-600 shrink-0" title="编辑">✏️</button>
+                          <button onClick={() => setGrantTarget({ type: 'tool', id: c.name })}
+                            className="text-xs text-gray-400 hover:text-indigo-600 shrink-0" title="授权">👥</button>
                           <button onClick={() => toggleTool(c.name, !c.enabled)}
                             className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${c.enabled !== false ? 'bg-indigo-600' : 'bg-gray-300'}`}>
                             <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${c.enabled !== false ? 'left-[18px]' : 'left-0.5'}`} />
                           </button>
                         </>
+                      )}
+                      {/* P3：已审批 mcpExposed 的 APP 工具——来源徽标 + 授权（写操作仍仅本地，APP 工具行无编辑/开关） */}
+                      {c.sourceApp && c.exposedViaMcp && (
+                        <button onClick={() => setGrantTarget({ type: 'tool', id: c.name })}
+                          className="text-xs text-gray-400 hover:text-indigo-600 shrink-0" title="授权">👥</button>
                       )}
                     </div>
                   ))}
@@ -708,6 +721,9 @@ export default function SettingsPanel() {
               {t('settings.mcpDescSuffix')}
             </p>
 
+            {/* APP MCP 暴露审批（置顶） */}
+            {isSysAdmin && <div className="mb-4 -mt-2"><McpExposePanel /></div>}
+
             {/* Built-in KB MCP */}
             <div className="mb-4">
               <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5 px-1">{t('settings.mcpBuiltin')}</div>
@@ -721,100 +737,150 @@ export default function SettingsPanel() {
               </div>
             </div>
 
-            {/* Registered MCP servers */}
+            {/* Registered MCP servers：左右布局——左列表右详情 */}
             <div className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-1.5 px-1">{t('settings.mcpRegistered')}</div>
             {mcpServers.length === 0 ? (
               <div className="text-sm text-gray-400 text-center py-6 border border-dashed border-gray-200 rounded-lg">
                 {t('settings.mcpEmpty')}
               </div>
             ) : (
-              <div className="space-y-2">
-                {mcpServers.map(c => (
-                  <div key={c.name} className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border ${c.enabled !== false ? 'border-gray-200' : 'border-gray-100 opacity-60'}`}>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-emerald-50 text-emerald-600">MCP</span>
-                    <SettingsMcpPhase phase={c.status?.phase} />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium truncate">{c.name}</div>
-                      <div className="text-xs text-gray-400 truncate">{c.description} ({t('settings.mcpTools', { n: c.toolCount || 0, names: c.tools?.join(', ') })})</div>
+              <div className="flex gap-4 items-start">
+                {/* 左：服务列表（点击选中 → 右侧详情） */}
+                <div className="w-80 shrink-0 space-y-2 max-h-[30rem] overflow-y-auto pr-1">
+                  {mcpServers.map(c => (
+                    <div key={c.name}
+                      onClick={() => {
+                        setSelectedConnector({ ...c, type: 'mcp' });
+                        setPermDraft(c.permissions || { allowedRoles: [], allowedUsers: [] });
+                        setMcpDetailTab('config');
+                        viewManifest(c.name);
+                      }}
+                      className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border cursor-pointer transition-colors ${
+                        selectedConnector?.name === c.name
+                          ? 'border-indigo-400 bg-indigo-50'
+                          : c.enabled !== false ? 'border-gray-200 hover:border-indigo-200' : 'border-gray-100 opacity-60'
+                      }`}>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-emerald-50 text-emerald-600 shrink-0">MCP</span>
+                      <SettingsMcpPhase phase={c.status?.phase} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{c.name}</div>
+                        <div className="text-xs text-gray-400 truncate">{t('settings.mcpTools', { n: c.toolCount || 0, names: c.tools?.join(', ') })}</div>
+                      </div>
+                      <button onClick={e => { e.stopPropagation();
+                        window.dispatchEvent(new CustomEvent('jianzhi:agent-action', {
+                          detail: { actionType: 'switch_agent', actionData: { target: 'connector_master' } },
+                        }));
+                        setTimeout(() => window.dispatchEvent(new CustomEvent('jianzhi:send-message', {
+                          detail: { content: `请帮我编辑 MCP Server "${c.name}"。\n描述: ${c.description || '无'}\n工具: ${c.tools?.join(', ') || '无'}` },
+                        })), 600);
+                      }} className="text-xs text-gray-400 hover:text-indigo-600 shrink-0" title="编辑">✏️</button>
+                      <button onClick={async e => {
+                        e.stopPropagation();
+                        if (!(await confirmDialog(`确认删除 MCP "${c.name}"？文件将移入回收站。`, { danger: true }))) return;
+                        await fetch(`${MAIN_URL}/api/mcp/${c.name}`, { method: 'DELETE', headers: authHeaders() });
+                        if (selectedConnector?.name === c.name) setSelectedConnector(null);
+                        loadConnectors();
+                      }} className="text-xs text-gray-400 hover:text-red-500 shrink-0" title="删除">🗑️</button>
+                      <button onClick={e => { e.stopPropagation(); toggleMcp(c.name, !c.enabled); }}
+                        className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${c.enabled !== false ? 'bg-indigo-600' : 'bg-gray-300'}`}>
+                        <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${c.enabled !== false ? 'left-[18px]' : 'left-0.5'}`} />
+                      </button>
                     </div>
-                    <button onClick={() => {
-                      window.dispatchEvent(new CustomEvent('jianzhi:agent-action', {
-                        detail: { actionType: 'switch_agent', actionData: { target: 'connector_master' } },
-                      }));
-                      setTimeout(() => window.dispatchEvent(new CustomEvent('jianzhi:send-message', {
-                        detail: { content: `请帮我编辑 MCP Server "${c.name}"。\n描述: ${c.description || '无'}\n工具: ${c.tools?.join(', ') || '无'}` },
-                      })), 600);
-                    }} className="text-xs text-gray-400 hover:text-indigo-600 shrink-0" title="编辑">✏️</button>
-                    <button onClick={() => viewManifest(c.name)}
-                      className="text-xs text-gray-400 hover:text-indigo-600 shrink-0" title="查看配置">📄</button>
-                    <button onClick={() => { setSelectedConnector({ ...c, type: 'mcp' }); setPermDraft(c.permissions || { allowedRoles: [], allowedUsers: [] }); }}
-                      className="text-xs text-gray-400 hover:text-indigo-600 shrink-0" title="权限设置">🔐</button>
-                    <button onClick={async () => {
-                      if (!(await confirmDialog(`确认删除 MCP "${c.name}"？文件将移入回收站。`, { danger: true }))) return;
-                      await fetch(`${MAIN_URL}/api/mcp/${c.name}`, { method: 'DELETE', headers: authHeaders() });
-                      loadConnectors();
-                    }} className="text-xs text-gray-400 hover:text-red-500 shrink-0" title="删除">🗑️</button>
-                    <button onClick={() => toggleMcp(c.name, !c.enabled)}
-                      className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${c.enabled !== false ? 'bg-indigo-600' : 'bg-gray-300'}`}>
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${c.enabled !== false ? 'left-[18px]' : 'left-0.5'}`} />
-                    </button>
-                  </div>
-                ))}
+                  ))}
+                </div>
+
+                {/* 右：详情（权限设置） */}
+                <div className="flex-1 min-w-0">
+                  {selectedConnector ? (
+                    <div className="border border-indigo-200 rounded-lg bg-indigo-50/30 flex flex-col">
+                      <div className="flex items-center justify-between px-4 pt-3">
+                        <div className="flex border-b border-indigo-100 -mb-px">
+                          {([['config', '配置'], ['perm', '权限']] as const).map(([key, label]) => (
+                            <button key={key} onClick={() => setMcpDetailTab(key)}
+                              className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${mcpDetailTab === key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2 pb-1">
+                          {isSysAdmin && (
+                            <button onClick={() => setGrantTarget({ type: 'connector', id: selectedConnector.name, subIds: selectedConnector.tools || [] })}
+                              className="text-xs px-2 py-0.5 bg-indigo-600 text-white rounded hover:bg-indigo-700" title="资源授权（用户/角色/部门）">
+                              授权
+                            </button>
+                          )}
+                          <button onClick={() => setSelectedConnector(null)} className="text-xs text-gray-400 hover:text-gray-600">✕</button>
+                        </div>
+                      </div>
+
+                      {/* 配置页：manifest 内容（原「查看配置」📄） */}
+                      {mcpDetailTab === 'config' && (
+                        <div className="p-4">
+                          {viewingManifest && viewingManifest.name === selectedConnector.name ? (
+                            <pre className="bg-white border border-gray-100 rounded-lg p-3 text-xs font-mono whitespace-pre-wrap overflow-auto max-h-80">{viewingManifest.yaml}</pre>
+                          ) : (
+                            <div className="text-xs text-gray-400 py-6 text-center">加载中…</div>
+                          )}
+                        </div>
+                      )}
+
+                      {/* 权限页：角色/用户权限 */}
+                      {mcpDetailTab === 'perm' && (
+                      <div className="p-4 space-y-3">
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">{t('settings.permRoles')}</label>
+                          <div className="flex gap-2">
+                            {['admin', 'member'].map(role => (
+                              <label key={role} className="flex items-center gap-1.5 text-sm cursor-pointer">
+                                <input type="checkbox" checked={permDraft.allowedRoles?.includes(role) || false}
+                                  onChange={e => {
+                                    const roles = permDraft.allowedRoles || [];
+                                    setPermDraft({ ...permDraft, allowedRoles: e.target.checked ? [...roles, role] : roles.filter(r => r !== role) });
+                                  }}
+                                  className="rounded border-gray-300" />
+                                {role === 'admin' ? t('settings.permAdmin') : t('settings.permUser')}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-500 mb-1">{t('settings.permUsers')}</label>
+                          <input type="text" value={(permDraft.allowedUsers || []).join(', ')}
+                            onChange={e => setPermDraft({ ...permDraft, allowedUsers: e.target.value.split(',').map(x => x.trim()).filter(Boolean) })}
+                            className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500"
+                            placeholder="user_id_1, user_id_2" />
+                        </div>
+                        <div className="flex gap-2">
+                          <button onClick={() => savePermissions(selectedConnector.type, selectedConnector.name)}
+                            className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">{t('settings.permSave')}</button>
+                        </div>
+                      </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center min-h-[10rem] border border-dashed border-gray-200 rounded-lg text-xs text-gray-400">
+                      ← 选择左侧服务查看详情
+                    </div>
+                  )}
+                </div>
               </div>
             )}
+
 
             {/* Recycle Bin */}
             <McpRecycleBin onRestore={loadConnectors} />
           </div>
 
-          {/* Permission editor */}
-          {selectedConnector && (
-            <div className="border border-indigo-200 rounded-lg p-4 bg-indigo-50/30">
-              <h4 className="text-sm font-semibold mb-3">{t('settings.permTitle', { name: selectedConnector.name })}</h4>
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">{t('settings.permRoles')}</label>
-                  <div className="flex gap-2">
-                    {['admin', 'member'].map(role => (
-                      <label key={role} className="flex items-center gap-1.5 text-sm cursor-pointer">
-                        <input type="checkbox" checked={permDraft.allowedRoles?.includes(role) || false}
-                          onChange={e => {
-                            const roles = permDraft.allowedRoles || [];
-                            setPermDraft({ ...permDraft, allowedRoles: e.target.checked ? [...roles, role] : roles.filter(r => r !== role) });
-                          }}
-                          className="rounded border-gray-300" />
-                        {role === 'admin' ? t('settings.permAdmin') : t('settings.permUser')}
-                      </label>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">{t('settings.permUsers')}</label>
-                  <input type="text" value={(permDraft.allowedUsers || []).join(', ')}
-                    onChange={e => setPermDraft({ ...permDraft, allowedUsers: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
-                    className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500"
-                    placeholder="user_id_1, user_id_2" />
-                </div>
-                <div className="flex gap-2">
-                  <button onClick={() => savePermissions(selectedConnector.type, selectedConnector.name)}
-                    className="px-4 py-1.5 bg-indigo-600 text-white text-sm rounded-lg hover:bg-indigo-700">{t('settings.permSave')}</button>
-                  <button onClick={() => setSelectedConnector(null)}
-                    className="px-4 py-1.5 text-sm text-gray-500 hover:text-gray-700">{t('common.cancel')}</button>
-                </div>
-              </div>
-            </div>
+          {grantTarget && (
+            <GrantEditor
+              resourceType={grantTarget.type}
+              resourceId={grantTarget.id}
+              subIdOptions={grantTarget.subIds}
+              onClose={() => setGrantTarget(null)}
+              onSaved={loadConnectors}
+            />
           )}
 
-          {/* Manifest viewer */}
-          {viewingManifest && (
-            <div className="border border-gray-200 rounded-lg p-4">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-sm font-semibold">{t('settings.manifestTitle', { name: viewingManifest.name })}</h4>
-                <button onClick={() => setViewingManifest(null)} className="text-xs text-gray-400 hover:text-gray-600">{t('common.close')}</button>
-              </div>
-              <pre className="bg-gray-50 border border-gray-100 rounded-lg p-3 text-xs font-mono whitespace-pre-wrap overflow-auto max-h-64">{viewingManifest.yaml}</pre>
-            </div>
-          )}
 
           {/* Register MCP */}
           {showRegister && (
@@ -1287,6 +1353,10 @@ export default function SettingsPanel() {
           )}
           <SettingsCredentialAdd onSave={(system, creds) => { saveCred(system, creds); }} />
         </div>
+      )}
+
+      {activeTab === 'timer' && isSysAdmin && (
+        <TimerPanel />
       )}
 
       {activeTab === 'analytics' && (

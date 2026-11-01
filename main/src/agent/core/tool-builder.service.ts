@@ -118,30 +118,43 @@ export class ToolBuilderService {
     };
   }
 
-  getBuiltinToolsByCategory() {
+  /** P1：传 principal 时按 meta/grants 过滤自定义工具与 MCP（未传保持旧行为） */
+  async getBuiltinToolsByCategory(principal?: InvocationPrincipal) {
     const builtinMap = this.getBuiltinMap();
     const groups = new Map<string, { name: string; description: string; enabled: boolean; builtin: boolean }[]>();
     for (const [id, meta] of Object.entries(builtinMap)) {
       if (!groups.has(meta.group)) groups.set(meta.group, []);
       groups.get(meta.group)!.push({ name: id, description: meta.label, enabled: true, builtin: true });
     }
-    const customTools = this.toolRegistry.getAll().map(t => ({ name: t.name, description: t.description || t.name, enabled: t.enabled, builtin: false }));
+    const allTools = principal
+      ? await this.toolRegistry.getAllForPrincipal(principal)
+      : this.toolRegistry.getAll();
+    const customTools = allTools.map(t => ({ name: t.name, description: t.description || t.name, enabled: t.enabled, builtin: false }));
     if (customTools.length) groups.set('自定义工具', customTools);
-    const mcpTools = this.mcpRegistry.getAll().map(m => ({ name: m.name, description: m.description || m.name, enabled: m.enabled, builtin: false }));
+    const allMcp = principal
+      ? await this.mcpRegistry.getAllForPrincipal(principal)
+      : this.mcpRegistry.getAll();
+    const mcpTools = allMcp.map(m => ({ name: m.name, description: m.description || m.name, enabled: m.enabled, builtin: false }));
     if (mcpTools.length) groups.set('MCP', mcpTools);
     return Array.from(groups.entries()).map(([category, tools]) => ({ category, tools }));
   }
 
-  getAvailableToolCatalog() {
+  async getAvailableToolCatalog(principal?: InvocationPrincipal) {
     const builtinMap = this.getBuiltinMap();
     const catalog: { id: string; label: string; group: string }[] = [];
     for (const [id, meta] of Object.entries(builtinMap)) {
       catalog.push({ id, ...meta });
     }
-    for (const t of this.toolRegistry.getAll()) {
+    const allTools = principal
+      ? await this.toolRegistry.getAllForPrincipal(principal)
+      : this.toolRegistry.getAll();
+    for (const t of allTools) {
       catalog.push({ id: `tool:${t.name}`, label: t.description || t.name, group: '自定义工具' });
     }
-    for (const m of this.mcpRegistry.getAll()) {
+    const allMcp = principal
+      ? await this.mcpRegistry.getAllForPrincipal(principal)
+      : this.mcpRegistry.getAll();
+    for (const m of allMcp) {
       if (m.status?.phase === 'building') continue;
       catalog.push({ id: `mcp:${m.name}`, label: m.description || m.name, group: 'MCP' });
     }

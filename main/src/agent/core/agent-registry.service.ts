@@ -1,8 +1,11 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, Optional } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { WorkspaceService } from '../../workspace/workspace.service';
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
+import { ResourceMetaService } from '../../platform/authz/resource-meta.service';
+import { ResourceAccessService } from '../../platform/authz/resource-access.service';
 
 export interface MessageDisplayConfig {
   toolProcess?: boolean;
@@ -43,6 +46,10 @@ export interface AgentDef {
   sessionConfig?: AgentSessionConfig;
   promptEnhancer?: { builtin: string };
   agentDelegation?: AgentDelegationEntry[];
+  // ── P1 运行期字段（meta join 得出，不落 YAML）──
+  scope?: 'global' | 'user';
+  ownerUserId?: string;
+  canEdit?: boolean;
 }
 
 @Injectable()
@@ -50,7 +57,12 @@ export class AgentRegistryService {
   private readonly logger = new Logger(AgentRegistryService.name);
   private agents = new Map<string, AgentDef>();
 
-  constructor(private readonly workspace: WorkspaceService) {
+  constructor(
+    private readonly workspace: WorkspaceService,
+    // P1：可选注入——authz 未接线（测试直构）时保持旧行为
+    @Optional() private readonly meta?: ResourceMetaService,
+    @Optional() private readonly access?: ResourceAccessService,
+  ) {
     this.loadAll();
   }
 
@@ -98,6 +110,34 @@ export class AgentRegistryService {
     return Array.from(this.agents.values());
   }
 
+  /**
+   * 按 principal 过滤的列表（P1）：visible + scope/ownerUserId/canEdit 注解。
+   * main 智能体由 ResourceAccessService 硬例外强制保留。
+   */
+  async getAllForPrincipal(p: InvocationPrincipal): Promise<AgentDef[]> {
+    if (!this.access) return this.getAll();
+    return this.access.annotateEditable('agent', this.getAll(), a => a.id, p);
+  }
+
+  /**
+   * 分配新 agent id（P1）：普通用户强制 `u_{shortUserId}_{slug}` 前缀防抢占全局命名空间；
+   * 与内存表/磁盘文件双方冲突 → 409，绝不覆盖既有 YAML。
+   */
+  allocateAgentId(requested: string | undefined, actor?: InvocationPrincipal): string {
+    const slug = (requested || 'agent').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+    const isAdmin = !!actor?.permissions.includes('sys:admin');
+    let id = slug;
+    if (!isAdmin && actor?.userId) {
+      const short = actor.userId.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8) || 'u';
+      id = `u_${short}_${slug}`;
+    }
+    const filePath = path.join(this.workspace.getAgentsDir(), `${id}.yaml`);
+    if (this.agents.has(id) || fs.existsSync(filePath)) {
+      throw new ConflictException(`智能体 ID 已被占用: ${id}`);
+    }
+    return id;
+  }
+
   get(id: string): AgentDef | undefined {
     return this.agents.get(id);
   }
@@ -122,7 +162,12 @@ export class AgentRegistryService {
     return this.agentOwners.get(agentId);
   }
 
-  save(def: AgentDef) {
+  /**
+   * 保存 agent（P1：改为 async）。新建时若带 actor 且 authz 已接线，写归属 meta：
+   * 普通用户 → scope='user'/owner=自己；admin → scope='global'。均 default_visibility='none'。
+   */
+  async save(def: AgentDef, actor?: InvocationPrincipal) {
+    const isNew = !this.agents.has(def.id);
     const filePath = path.join(this.workspace.getAgentsDir(), `${def.id}.yaml`);
     const content = yaml.dump({ agent: {
       id: def.id,
@@ -140,15 +185,27 @@ export class AgentRegistryService {
     }}, { lineWidth: 120 });
     fs.writeFileSync(filePath, content, 'utf-8');
     this.agents.set(def.id, def);
+    if (isNew && actor && this.meta) {
+      const isAdmin = actor.permissions.includes('sys:admin');
+      await this.meta.upsert({
+        resourceType: 'agent', resourceId: def.id,
+        scope: isAdmin ? 'global' : 'user',
+        ownerUserId: isAdmin ? undefined : actor.userId,
+        builtin: def.builtin, defaultVisibility: 'none',
+        createdBy: actor.userId,
+      });
+    }
     this.logger.log(`Saved agent: ${def.id}`);
   }
 
-  delete(id: string): boolean {
+  /** 删除（P1：async，连带清理 meta/grants） */
+  async delete(id: string): Promise<boolean> {
     const def = this.agents.get(id);
     if (!def || def.builtin) return false;
     const filePath = path.join(this.workspace.getAgentsDir(), `${id}.yaml`);
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
     this.agents.delete(id);
+    if (this.meta) await this.meta.remove('agent', id);
     this.logger.log(`Deleted agent: ${id}`);
     return true;
   }

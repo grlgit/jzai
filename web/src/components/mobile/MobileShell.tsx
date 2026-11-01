@@ -3,6 +3,9 @@
 import { useState, useEffect, useRef } from 'react';
 import SessionList from '@/components/SessionList';
 import { useI18n, LOCALES } from '@/i18n';
+import MobileTabBar from '@/components/mobile/MobileTabBar';
+import MobileAppsTab from '@/components/mobile/MobileAppsTab';
+import type { PanelAgentMessage } from '@/components/DynamicPanelLoader';
 
 interface AgentInfo {
   id: string;
@@ -23,14 +26,41 @@ interface Props {
   onLoadSession: (sessionId: string) => void;
   onNewSession: () => void;
   onLogout: () => void;
+  /** P4：/api/sidebar 返回的可见面板（含 mobile 声明） */
+  panels: Array<{
+    id: string; name: string; sourceAppId?: string | null; entryComponent?: string | null;
+    agentId?: string | null; appVersion?: string | null;
+    mobile?: { supported: boolean; entryComponent?: string; layout?: 'full' | 'sheet' } | null;
+  }>;
+  onPanelAgentMessage?: (panel: { id: string; sourceAppId?: string | null; agentId?: string | null }, msg: PanelAgentMessage) => void | Promise<void>;
   children: React.ReactNode;
 }
 
-/** 移动端外壳：顶栏（会话抽屉 / 智能体切换 / 用户菜单）+ 全屏聊天区。不渲染任何面板类功能。 */
+/** P4 移动端外壳：顶栏 + 双 TAB 容器（对话 / 应用）。对话区保持原结构，TAB 切换不卸载（keepAlive）。 */
 export default function MobileShell({
   user, token, companyName, agentList, myCoWorkers, activeAgent, sessionId,
-  onAgentSelect, onLoadSession, onNewSession, onLogout, children,
+  onAgentSelect, onLoadSession, onNewSession, onLogout, panels, onPanelAgentMessage, children,
 }: Props) {
+  const [activeTab, setActiveTab] = useState<'chat' | 'apps'>('chat');
+  const [notice, setNotice] = useState('');
+
+  // P4：agent navigate 到支持的移动面板 → 自动切"应用"TAB；不支持 → toast
+  useEffect(() => {
+    const openHandler = () => setActiveTab('apps');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const noticeHandler = (e: Event) => {
+      setNotice((e as CustomEvent).detail?.text ?? '');
+      clearTimeout(timer);
+      timer = setTimeout(() => setNotice(''), 3000);
+    };
+    window.addEventListener('jianzhi:mobile-open-panel', openHandler);
+    window.addEventListener('jianzhi:mobile-notice', noticeHandler);
+    return () => {
+      window.removeEventListener('jianzhi:mobile-open-panel', openHandler);
+      window.removeEventListener('jianzhi:mobile-notice', noticeHandler);
+      clearTimeout(timer);
+    };
+  }, []);
   const { t, locale, setLocale } = useI18n();
   const [showSessions, setShowSessions] = useState(false);
   const [showAgentMenu, setShowAgentMenu] = useState(false);
@@ -152,10 +182,23 @@ export default function MobileShell({
         </div>
       </div>
 
-      {/* 聊天区 */}
-      <div className="flex-1 flex flex-col relative min-h-0 min-w-0">
+      {/* 内容区：双 TAB（均保持挂载，切换不丢会话/面板状态） */}
+      <div className={`flex-1 flex flex-col relative min-h-0 min-w-0 ${activeTab === 'apps' ? 'hidden' : ''}`}>
         {children}
       </div>
+      <div className={`flex-1 flex flex-col relative min-h-0 min-w-0 ${activeTab === 'chat' ? 'hidden' : ''}`}>
+        <MobileAppsTab panels={panels} onPanelAgentMessage={onPanelAgentMessage} />
+      </div>
+
+      {/* 底部 TAB 条（安全区） */}
+      <MobileTabBar active={activeTab} onChange={setActiveTab} />
+
+      {/* P4 移动 toast（如「该功能暂不支持移动端」） */}
+      {notice && (
+        <div className="fixed left-1/2 -translate-x-1/2 bottom-20 z-[60] px-4 py-2 rounded-lg bg-gray-900/85 text-white text-xs shadow-lg max-w-[85vw]">
+          {notice}
+        </div>
+      )}
 
       {/* 历史会话全屏抽屉 */}
       <SessionList

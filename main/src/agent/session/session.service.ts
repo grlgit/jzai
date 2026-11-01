@@ -61,7 +61,7 @@ export class SessionService {
   async getRecentSession(userId: string, agentType: string, reuseWindowMinutes = 10): Promise<string | null> {
     const windowMin = Number.isFinite(reuseWindowMinutes) && reuseWindowMinutes > 0 ? Math.floor(reuseWindowMinutes) : 10;
     const { rows } = await this.db.query(
-      `SELECT id FROM jz_sessions WHERE user_id = $1 AND agent_type = $2 AND updated_at > NOW() - make_interval(mins => $3) ORDER BY updated_at DESC LIMIT 1`,
+      `SELECT id FROM jz_sessions WHERE user_id = $1 AND agent_type = $2 AND id NOT LIKE 'sched_%' AND updated_at > NOW() - make_interval(mins => $3) ORDER BY updated_at DESC LIMIT 1`,
       [userId, agentType, windowMin],
     );
     return rows[0]?.id || null;
@@ -77,7 +77,7 @@ export class SessionService {
 
   async listSessions(userId: string, agentType: string = 'main', limit: number = 20, offset: number = 0): Promise<Session[]> {
     const { rows } = await this.db.query(
-      'SELECT id, user_id as "userId", agent_type as "agentType", title, skill_name as "skillName", created_at as "createdAt", updated_at as "updatedAt" FROM jz_sessions WHERE user_id = $1 AND agent_type = $2 ORDER BY updated_at DESC LIMIT $3 OFFSET $4',
+      'SELECT id, user_id as "userId", agent_type as "agentType", title, skill_name as "skillName", created_at as "createdAt", updated_at as "updatedAt" FROM jz_sessions WHERE user_id = $1 AND agent_type = $2 AND id NOT LIKE \'sched_%\' ORDER BY updated_at DESC LIMIT $3 OFFSET $4',
       [userId, agentType, limit, offset],
     );
     return rows;
@@ -85,7 +85,7 @@ export class SessionService {
 
   async countSessions(userId: string, agentType: string = 'main'): Promise<number> {
     const { rows } = await this.db.query(
-      'SELECT COUNT(*) FROM jz_sessions WHERE user_id = $1 AND agent_type = $2',
+      'SELECT COUNT(*) FROM jz_sessions WHERE user_id = $1 AND agent_type = $2 AND id NOT LIKE \'sched_%\'',
       [userId, agentType],
     );
     return parseInt(rows[0].count, 10);

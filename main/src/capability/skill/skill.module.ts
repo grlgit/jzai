@@ -9,9 +9,10 @@ import { SkillController } from './skill.controller';
 import { ModelRouterModule } from '../../model-router/model-router.module';
 import { UserModule } from '../../user/user.module';
 import { AppCapabilityModule } from '../../platform/app-store/app-capability.module';
+import { AuthzModule } from '../../platform/authz/authz.module';
 
 @Module({
-  imports: [ModelRouterModule, UserModule, AppCapabilityModule],
+  imports: [ModelRouterModule, UserModule, AppCapabilityModule, AuthzModule],
   controllers: [SkillController],
   providers: [
     SkillRegistryService, SkillDiscoveryService, SkillExecutorService,

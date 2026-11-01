@@ -31,7 +31,7 @@ interface CredentialFormProps {
   isAdmin?: boolean;           // whether current user is admin
 }
 
-export default function CredentialForm({ name, credSystem, authFields, userId, credentials, onSaved, scope = 'user', isAdmin = false }: CredentialFormProps) {
+export default function CredentialForm({ name, credSystem, authFields, credentials, onSaved, scope = 'user', isAdmin = false }: CredentialFormProps) {
   const { t } = useI18n();
   const existing = credentials[credSystem] || null;
 
@@ -71,7 +71,7 @@ export default function CredentialForm({ name, credSystem, authFields, userId, c
     } else {
       await fetch(`${MAIN_URL}/api/skills/credentials/save`, {
         method: 'POST', headers: authHeaders(),
-        body: JSON.stringify({ userId, systemName: credSystem, credentials: cleaned }),
+        body: JSON.stringify({ systemName: credSystem, credentials: cleaned }),
       });
     }
     onSaved();
@@ -84,7 +84,7 @@ export default function CredentialForm({ name, credSystem, authFields, userId, c
         method: 'DELETE', headers: authHeaders(),
       });
     } else {
-      await fetch(`${MAIN_URL}/api/skills/credentials/${encodeURIComponent(credSystem)}?userId=${userId}`, {
+      await fetch(`${MAIN_URL}/api/skills/credentials/${encodeURIComponent(credSystem)}`, {
         method: 'DELETE', headers: authHeaders(),
       });
     }

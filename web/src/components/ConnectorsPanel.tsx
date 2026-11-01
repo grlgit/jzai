@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useI18n } from '@/i18n';
 import { useAuth } from '@/hooks/useAuth';
+import GrantEditor from '@/components/authz/GrantEditor';
 import CredentialForm from './CredentialForm';
 import dynamic from 'next/dynamic';
 
@@ -26,6 +27,7 @@ interface ConnectorsPanelProps {
 export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps) {
   const { t } = useI18n();
   const { user } = useAuth();
+  const isAdmin = typeof user?.role === 'object' && !!user?.role?.permissions?.includes('sys:admin');
   const userId = user?.id || '';
   const [tools, setTools] = useState<any[]>([]);
   const [mcps, setMcps] = useState<any[]>([]);
@@ -36,7 +38,7 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
   const [manifest, setManifest] = useState<string>('');
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState('');
-  const [detailTab, setDetailTab] = useState<'config' | 'code' | 'credentials' | 'llmHint' | 'schema'>('config');
+  const [detailTab, setDetailTab] = useState<'config' | 'code' | 'credentials' | 'llmHint' | 'schema' | 'grant'>('config');
   const [handlerCode, setHandlerCode] = useState('');
   const [handlerDraft, setHandlerDraft] = useState('');
   const [handlerSaving, setHandlerSaving] = useState(false);
@@ -57,7 +59,7 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
 
   const loadCredentials = useCallback(async () => {
     if (!userId) return;
-    const data = await fetch(`${MAIN_URL}/api/skills/credentials/list?userId=${userId}`, { headers: authHeaders() }).then(r => r.json()).catch(() => ({}));
+    const data = await fetch(`${MAIN_URL}/api/skills/credentials/list`, { headers: authHeaders() }).then(r => r.json()).catch(() => ({}));
     if (data && !data.error) setCredentials(data);
   }, [userId]);
 
@@ -215,7 +217,9 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
                       )}
                       <McpPhase phase={c.status?.phase} />
                     </div>
-                    <div className="text-xs font-medium text-gray-800 truncate">{c.name}</div>
+                    <div className="text-xs font-medium text-gray-800 truncate" title={c.name}>
+                      {(c.description || '').replace(/\s*\([^)]*\)\s*$/, '').split(/\s*[—–]\s*|\s+-\s+|。/)[0]?.trim() || c.system || c.name}
+                    </div>
                     <div className="text-[10px] text-gray-400 mt-0.5">
                       {(c.tools || []).map((t: any) => typeof t === 'string' ? t : t.name).join(', ') || `${c.toolCount || 0} tools`}
                     </div>
@@ -328,7 +332,8 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
             {/* Tabs */}
             <div className="flex border-b border-gray-200 shrink-0">
               {([['config', '配置'], ['code', '代码'], ['credentials', '凭证'],
-                ...(selected!.type === 'mcp' && selectedDetail.name?.startsWith('db-') ? [['schema', '表结构']] : [])
+                ...(selected!.type === 'mcp' && selectedDetail.name?.startsWith('db-') ? [['schema', '表结构']] : []),
+                ...(isAdmin ? [['grant', '授权']] : []),
               ] as [string, string][]).map(([key, label]) => (
                 <button key={key} onClick={() => {
                   setDetailTab(key as any);
@@ -420,6 +425,17 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
                 />
               ) : detailTab === 'schema' ? (
                 <DbSchemaViewer name={selectedDetail.name} />
+              ) : detailTab === 'grant' ? (
+                <div className="h-full overflow-y-auto p-4">
+                  <GrantEditor
+                    inline
+                    resourceType={selected!.type === 'mcp' ? 'connector' : 'tool'}
+                    resourceId={selectedDetail.name}
+                    subIdOptions={selected!.type === 'mcp' ? (selectedDetail.tools || []).map((t: any) => typeof t === 'string' ? t : t.name) : undefined}
+                    onClose={() => setDetailTab('config')}
+                    onSaved={load}
+                  />
+                </div>
               ) : null}
             </div>
           </>

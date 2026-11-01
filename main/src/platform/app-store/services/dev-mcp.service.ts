@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -11,6 +11,9 @@ import { CredentialService } from '../../../capability/skill/credential.service'
 import { ToolBridgeService } from '../../../agent/tool-bridge/tool-bridge.service';
 import { DevUploadService } from './dev-upload.service';
 import { createDevMcpPrincipal } from '../runtime/invocation-principal';
+import { createInvocationPrincipal } from '../runtime/invocation-principal';
+import { AppMcpExposeService } from './app-mcp-expose.service';
+import { ResourceAccessService } from '../../authz/resource-access.service';
 
 export type DevTokenScope = 'read' | 'invoke' | 'manage';
 
@@ -80,6 +83,9 @@ export class DevMcpService {
     private readonly credentials: CredentialService,
     private readonly moduleRef: ModuleRef,
     private readonly uploads: DevUploadService,
+    // P3：审批门控（isAllowed）+ P1 grants 双保险（canView）；未接线时保持旧行为
+    @Optional() private readonly expose?: AppMcpExposeService,
+    @Optional() private readonly access?: ResourceAccessService,
   ) {}
 
   isEnabled(): boolean {
@@ -175,6 +181,8 @@ export class DevMcpService {
     const apps = await this.registry.findAll();
     const ids = new Set<string>();
     for (const app of apps.filter(a => a.status === 'active')) {
+      // P3：三方包 mcpExposed 须审批后生效（首方恒通）
+      if (this.expose && !(await this.expose.isAllowed(app.appId))) continue;
       for (const tp of app.manifest?.backend?.toolProviders ?? []) {
         if (tp.mcpExposed) for (const t of tp.toolIds ?? []) ids.add(t);
       }
@@ -204,10 +212,36 @@ export class DevMcpService {
     }
     const exposed = await this.getExposedToolIds();
     if (!exposed.has(name)) throw new Error(`Tool not exposed via dev MCP: ${name}`);
+    // P3 双保险：grants 控"谁能调"（审批控"是否暴露"）。dev-mcp principal 属 system 直通，
+    // 故以 actor 的真实用户身份判定 canView。
+    if (this.access) {
+      const principal = await this.principalForActor(actorId);
+      if (!principal || !(await this.access.canView('tool', name, principal))) {
+        throw new Error(`No tool grant for actor: ${name}`);
+      }
+    }
     const bridge = this.moduleRef.get(ToolBridgeService, { strict: false });
     const result = await bridge.callTool(name, args, createDevMcpPrincipal(actorId));
     await this.audit.log('dev-mcp', 'dev_mcp_call', actorId, { tool: name });
     return result;
+  }
+
+  /** P3：以 actor 的真实用户身份（role/department/permissions）构造 canView 判定主体 */
+  private async principalForActor(actorId: string) {
+    const { rows } = await this.db.query(
+      `SELECT u.id, u.role_id, r.permissions
+       FROM jz_users u LEFT JOIN jz_roles r ON r.id = u.role_id WHERE u.id = $1`, [actorId]);
+    if (!rows[0]) return null;
+    const dm = await this.db.query(
+      `SELECT department_id FROM jz_department_members WHERE user_id=$1`, [actorId]);
+    return createInvocationPrincipal({
+      type: 'user', principalId: `user:${actorId}`, userId: actorId,
+      roleIds: rows[0].role_id ? [rows[0].role_id] : [],
+      departmentIds: dm.rows.map(r => r.department_id),
+      permissions: rows[0].permissions ?? [],
+      origin: 'dev-mcp',
+      issuedAt: Date.now(),
+    });
   }
 
   private callBuiltinTool(name: string, args: any): unknown {

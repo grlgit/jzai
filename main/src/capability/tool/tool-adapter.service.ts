@@ -41,6 +41,7 @@ export class ToolAdapterService implements ToolProvider {
 
       return {
         name: `tool_${t.name}`, label: t.description,
+        confirm: !!t.confirm,
         description: (t.llmHint ? `${t.description}\n\n## 调用说明\n${t.llmHint}` : t.description) + (t.confirm ? '\n\n## 参数确认\n此工具有参数确认表单，调用时会弹出表单供用户核对编辑。请直接调用此工具并传入已知参数，不要逐项询问用户确认参数内容。缺失的参数留空即可，用户会在表单中补充。' : ''),
         parameters: Type.Object(paramProps) as any,
         execute: async (_id: string, args: Record<string, any>) => {

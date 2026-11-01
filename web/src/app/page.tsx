@@ -235,7 +235,7 @@ export default function Home() {
   // Load agents + suggestions + my CoWorkers
   useEffect(() => {
     if (!token) return;
-    fetch(`${MAIN_URL}/api/agents`).then(r => r.json())
+    fetch(`${MAIN_URL}/api/agents`, { headers: { 'Authorization': `Bearer ${token}` } }).then(r => r.json())
       .then(agents => { if (Array.isArray(agents)) setAgentList(agents); })
       .catch(() => {});
     fetch(`${MAIN_URL}/api/suggestions`, { headers: { 'Authorization': `Bearer ${token}` } })
@@ -490,8 +490,18 @@ export default function Home() {
   useEffect(() => {
     const handler = (e: Event) => {
       const { actionType, actionData } = (e as CustomEvent).detail;
-      // 移动模式：面板类动作静默忽略（navigate/form_fill/ui_hook 均无面板可承载）
-      if (isMobile && (actionType === 'navigate' || actionType === 'form_fill' || actionType === 'ui_hook')) return;
+      // P4 移动模式：navigate 目标支持移动端 → 切"应用"TAB 打开；否则 toast 提示。form_fill/ui_hook 维持忽略
+      if (isMobile && actionType === 'navigate') {
+        const target = sidebarPanels.find(p => p.id === actionData.target);
+        if (target?.mobile?.supported) {
+          window.dispatchEvent(new CustomEvent('jianzhi:mobile-open-panel', { detail: { panelId: target.id } }));
+        } else {
+          window.dispatchEvent(new CustomEvent('jianzhi:mobile-notice', {
+            detail: { text: `「${target?.name || actionData.target}」暂不支持移动端` } }));
+        }
+        return;
+      }
+      if (isMobile && (actionType === 'form_fill' || actionType === 'ui_hook')) return;
       switch (actionType) {
         case 'navigate':
           // Agent-triggered navigate: open panel but do NOT switch agent
@@ -525,7 +535,7 @@ export default function Home() {
     };
     window.addEventListener('jianzhi:agent-action', handler);
     return () => window.removeEventListener('jianzhi:agent-action', handler);
-  }, [handleNavigateOnly, handleAgentSelect, isMobile]);
+  }, [handleNavigateOnly, handleAgentSelect, isMobile, sidebarPanels]);
 
   // Draggable divider between content panel and chat panel
   const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
@@ -736,6 +746,8 @@ export default function Home() {
           onLoadSession={(sid) => { loadSession(sid); setChatStarted(true); }}
           onNewSession={() => { newSession(); setChatStarted(false); }}
           onLogout={handleLogout}
+          panels={sidebarPanels}
+          onPanelAgentMessage={handlePanelAgentMessage}
         >
           {renderChatContent(true)}
         </MobileShell>

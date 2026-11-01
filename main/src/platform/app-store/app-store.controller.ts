@@ -1,10 +1,11 @@
 import {
-  Controller, Get, Post, Delete, Param, Body, Query,
+  Controller, Get, Put, Post, Delete, Param, Body, Query,
   UseGuards, HttpCode, HttpStatus, HttpException, UploadedFile,
   UseInterceptors, Res, Req, BadRequestException, NotFoundException,
   ForbiddenException, Logger, Sse, MessageEvent,
 } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { RequireAdmin } from '../authz/require-permission.decorator';
 import { Observable } from 'rxjs';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
@@ -18,6 +19,7 @@ import { APP_CONFIG_ARTIFACT_PERMISSION, AppActivationService } from './services
 import { AppUninstallService } from './services/app-uninstall.service';
 import { AppUpgradeService } from './services/app-upgrade.service';
 import { AppGrantService } from './services/app-grant.service';
+import { AppMcpExposeService } from './services/app-mcp-expose.service';
 import { AppAuditService } from './services/app-audit.service';
 import { AppStagingService } from './services/app-staging.service';
 import { AppInstallOperationService } from './services/app-install-operation.service';
@@ -57,6 +59,7 @@ export class AppStoreController {
     private readonly connectionBindings: AppConnectionBindingService,
     private readonly companions: CompanionServiceManager,
     private readonly moduleRef: ModuleRef,
+    private readonly mcpExpose: AppMcpExposeService,
   ) {}
 
   // ------------------------------------------------------------------
@@ -276,6 +279,36 @@ export class AppStoreController {
     this.requireAdmin(req);
     await this.grants.setGrant({ ...body, appId });
     return { ok: true };
+  }
+
+  // ------------------------------------------------------------------
+  // P3：MCP 暴露审批（docs/rework-2026H2/design-p3-app-mcp.md §4）
+  // ------------------------------------------------------------------
+
+  @RequireAdmin()
+  @Get('apps/:appId/mcp-expose')
+  async getMcpExpose(@Param('appId') appId: string) {
+    const declared = (await this.mcpExpose.listDeclared()).find(d => d.appId === appId);
+    return declared ?? { appId, toolIds: [], firstParty: false, allowed: false };
+  }
+
+  @RequireAdmin()
+  @Put('apps/:appId/mcp-expose')
+  async setMcpExpose(
+    @Param('appId') appId: string,
+    @Body() body: { allowed?: boolean; note?: string },
+    @Req() req: any,
+  ) {
+    if (typeof body?.allowed !== 'boolean') {
+      throw new BadRequestException('allowed 必须是布尔值');
+    }
+    return this.mcpExpose.setAllowed(appId, body.allowed, req.user?.id ?? 'unknown', body.note);
+  }
+
+  @RequireAdmin()
+  @Get('mcp-expose/declared')
+  async listMcpExposeDeclared() {
+    return this.mcpExpose.listDeclared();
   }
 
   // ------------------------------------------------------------------

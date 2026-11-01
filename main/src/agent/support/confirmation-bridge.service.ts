@@ -33,11 +33,13 @@ export class ConfirmationBridgeService {
    */
   requestConfirmation(request: ConfirmRequest): Promise<Record<string, any>> {
     this.logger.log(`Requesting confirmation: ${request.confirmId} for tool ${request.toolName}`);
-    this.events.emit('confirm_request', request);
 
-    return new Promise((resolve, reject) => {
+    // 先注册 pending 再广播：同步应答器（P2 定时任务 headless 自动拒绝）立即可查
+    const promise = new Promise<Record<string, any>>((resolve, reject) => {
       this.pending.set(request.confirmId, { resolve, reject });
     });
+    this.events.emit('confirm_request', request);
+    return promise;
   }
 
   /**

@@ -20,6 +20,8 @@ import { AnalyticsService } from '../../platform/analytics/analytics.service';
 import { PromptEnhancerService } from '../prompt/prompt-enhancer.service';
 import { PromptEnhancerLoaderService } from '../prompt/prompt-enhancer.loader';
 import { AgentDelegationRegistry } from './agent-delegation.registry';
+import { ResourceAccessService } from '../../platform/authz/resource-access.service';
+import { createUserPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 
 /**
  * 防循环守卫的纯决策函数（便于单测）。
@@ -167,6 +169,7 @@ export class DynamicAgentService implements OnModuleInit {
     private readonly delegationRegistry: AgentDelegationRegistry,
     @Optional() @Inject(forwardRef(() => EditionService)) private readonly edition?: EditionService,
     @Optional() private readonly distill?: DistillService,
+    @Optional() private readonly resourceAccess?: ResourceAccessService,
   ) {}
 
   async onModuleInit() {
@@ -906,7 +909,12 @@ export class DynamicAgentService implements OnModuleInit {
         { id: 'dashboard', name: '数据仪表' }, { id: 'skills', name: '技能管理' }, { id: 'connectors', name: '连接管理' },
         { id: 'agents', name: '智能体管理' }, { id: 'users', name: '用户管理' }, { id: 'cfg', name: '设置' },
       ];
-      const agentDefs = this.registry.getAll().filter(a => a.id !== def.id);
+      // P1：委派候选按会话 principal 过滤——不可见 agent 不得泄露给 LLM（否则可被 switch_agent 间接调用）
+      let agentDefs = this.registry.getAll().filter(a => a.id !== def.id);
+      if (this.resourceAccess) {
+        const filterPrincipal = principal ?? createUserPrincipal({ id: userId }, 'agent:ui_control');
+        agentDefs = await this.resourceAccess.filterVisible('agent', agentDefs, a => a.id, filterPrincipal);
+      }
       systemPrompt += `\n\n## 可用面板\n${panels.map(p => `  - "${p.name}" → ${p.id}`).join('\n')}`;
       systemPrompt += `\n\n## 可切换智能体\n${agentDefs.map(a => `  - "${a.name}" → ${a.id}`).join('\n')}`;
 

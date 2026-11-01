@@ -6,6 +6,8 @@ import remarkGfm from 'remark-gfm';
 import { useI18n } from '@/i18n';
 import dynamic from 'next/dynamic';
 import { useAuth } from '@/hooks/useAuth';
+import ScopeBadge from '@/components/authz/ScopeBadge';
+import GrantEditor from '@/components/authz/GrantEditor';
 import { confirmDialog } from '@/components/AppDialog';
 import CredentialForm from './CredentialForm';
 import type { ChatMessage } from '@/hooks/useChat';
@@ -31,11 +33,12 @@ interface SkillsManagePanelProps {
 export default function SkillsManagePanel({ messages = [], onOpenSession }: SkillsManagePanelProps = {}) {
   const { t } = useI18n();
   const { user } = useAuth();
+  const isAdmin = typeof user?.role === 'object' && !!user?.role?.permissions?.includes('sys:admin');
   const [skills, setSkills] = useState<any[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [detail, setDetail] = useState<any>(null);
   const [credentials, setCredentials] = useState<Record<string, Record<string, string>>>({});
-  const [detailTab, setDetailTab] = useState<'overview' | 'scripts' | 'references' | 'assets' | 'credentials'>('overview');
+  const [detailTab, setDetailTab] = useState<'overview' | 'scripts' | 'references' | 'assets' | 'credentials' | 'grant'>('overview');
   const [editingInstructions, setEditingInstructions] = useState<false | 'body' | 'source'>(false);
   const [instructionsDraft, setInstructionsDraft] = useState('');
   const [saving, setSaving] = useState(false);
@@ -45,6 +48,10 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
 
   const userId = user?.id || '';
 
+  // 授权/分享页签可见性（与原列表按钮同一条件：admin 对 global，owner 对自己的 user 资源）
+  const selectedSkill = skills.find(s => s.name === selected);
+  const canGrant = !!selectedSkill && (isAdmin ? selectedSkill.scope === 'global' : (selectedSkill.scope === 'user' && selectedSkill.ownerUserId === user?.id));
+
   const load = useCallback(async () => {
     const data = await fetch(`${MAIN_URL}/api/skills`, { headers: authHeaders() }).then(r => r.json()).catch(() => []);
     setSkills(Array.isArray(data) ? data : []);
@@ -52,7 +59,7 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
 
   const loadCredentials = useCallback(async () => {
     if (!userId) return;
-    const data = await fetch(`${MAIN_URL}/api/skills/credentials/list?userId=${userId}`, { headers: authHeaders() }).then(r => r.json()).catch(() => ({}));
+    const data = await fetch(`${MAIN_URL}/api/skills/credentials/list`, { headers: authHeaders() }).then(r => r.json()).catch(() => ({}));
     if (data && !data.error) setCredentials(data);
   }, [userId]);
 
@@ -209,17 +216,19 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
                       : 'border-gray-200 bg-white hover:border-indigo-200'
                   }`}>
                   <div className="flex items-center gap-1.5 mb-1">
-                    <span className="text-[9px] px-1 py-0.5 rounded font-medium bg-emerald-50 text-emerald-600">Skill</span>
                     {s.hasHandler && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-50 text-blue-500">⚙</span>}
                     {s.sourceApp && (
                       <span className="text-[9px] px-1 py-0.5 rounded font-medium bg-indigo-50 text-indigo-600 truncate max-w-[72px]" title={s.sourceApp.name}>
                         {s.sourceApp.name}
                       </span>
                     )}
+                    <ScopeBadge scope={s.scope} />
                   </div>
-                  <div className="text-xs font-medium text-gray-800 truncate">{s.name}</div>
-                  <div className="text-[10px] text-gray-400 truncate mt-0.5">
-                    {s.allowedTools?.length ? `${s.allowedTools.length} tools` : s.metadata?.system || '—'}
+                  <div className="text-xs font-medium text-gray-800 truncate" title={s.name}>
+                    {(s.description || '').split(/\s*[—–]\s*|\s+-\s+|。/)[0]?.trim() || s.name}
+                  </div>
+                  <div className="text-[10px] text-gray-400 truncate mt-0.5" title={s.name}>
+                    {s.name}
                   </div>
                 </button>
               ))}
@@ -284,6 +293,7 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
                 ['references', `参考${detail.references?.length ? ` (${detail.references.length})` : ''}`],
                 ['assets', `资源${detail.assets?.length ? ` (${detail.assets.length})` : ''}`],
                 ['credentials', '凭证'],
+                ...(canGrant ? [['grant', isAdmin ? '授权' : '分享'] as const] : []),
               ] as const).map(([key, label]) => (
                 <button key={key} onClick={() => setDetailTab(key)}
                   className={`px-4 py-2 text-xs font-medium border-b-2 transition-colors ${detailTab === key ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
@@ -377,7 +387,7 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
                   createPlaceholder="文件名 (如 template.json)"
                   saving={saving} editorType="code" language="json"
                 />
-              ) : (
+              ) : detailTab === 'credentials' ? (
                 <CredentialForm
                   name={detail.name}
                   credSystem={detail.metadata?.system || detail.name}
@@ -386,6 +396,16 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
                   credentials={credentials}
                   onSaved={loadCredentials}
                 />
+              ) : (
+                <div className="h-full overflow-y-auto p-4">
+                  <GrantEditor
+                    inline
+                    resourceType="skill"
+                    resourceId={detail.name}
+                    onClose={() => setDetailTab('overview')}
+                    onSaved={load}
+                  />
+                </div>
               )}
             </div>
           </>

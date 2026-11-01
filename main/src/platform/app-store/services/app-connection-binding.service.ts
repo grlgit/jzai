@@ -125,7 +125,7 @@ export class AppConnectionBindingService {
     if (input.servicePrincipalId) {
       await this.servicePrincipals.assertOwnedByApp(appId, input.servicePrincipalId);
     }
-    if (!this.mcpRegistry.isAllowedForUser(input.connectionName, actor.userId, actor.roleIds)) {
+    if (!await this.mcpRegistry.isAllowedForUser(input.connectionName, actor.userId, actor.roleIds, actor)) {
       throw new ForbiddenException(`No access to connection ${input.connectionName}`);
     }
     const tool = this.getConnectionTool(input.connectionName, input.toolName);
@@ -410,7 +410,7 @@ export class AppConnectionBindingService {
     }
     if (principal.type === 'delegated' && !hasConnectionScope) return false;
     if (!principal.userId) return false;
-    if (!this.mcpRegistry.isAllowedForUser(binding.connectionName, principal.userId, principal.roleIds)) {
+    if (!await this.mcpRegistry.isAllowedForUser(binding.connectionName, principal.userId, principal.roleIds, principal)) {
       return false;
     }
 

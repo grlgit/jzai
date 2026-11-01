@@ -24,7 +24,7 @@ const defaultServer = {
 
 let enabledList: any[] = [];
 const mockMcpRegistry = {
-  isAllowedForUser: jest.fn().mockReturnValue(true),
+  isAllowedForUser: jest.fn().mockResolvedValue(true),
   getEnabled: jest.fn(() => enabledList),
   get: jest.fn((name: string) => enabledList.find((m: any) => m.name === name)),
 };
@@ -39,7 +39,7 @@ describe('McpAdapterService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     enabledList = [defaultServer];
-    mockMcpRegistry.isAllowedForUser.mockReturnValue(true);
+    mockMcpRegistry.isAllowedForUser.mockResolvedValue(true);
     service = new McpAdapterService(
       mockMcpRegistry as any,
       new McpRunnerService(mockMcpRegistry as any, mockCredentialService as any),
@@ -82,7 +82,7 @@ describe('McpAdapterService', () => {
   });
 
   test('filters connectors that deny the current user and roles', async () => {
-    mockMcpRegistry.isAllowedForUser.mockReturnValue(false);
+    mockMcpRegistry.isAllowedForUser.mockResolvedValue(false);
 
     const tools = await service.createTools({
       principal: {
@@ -100,12 +100,12 @@ describe('McpAdapterService', () => {
     });
 
     expect(tools).toHaveLength(0);
-    expect(mockMcpRegistry.isAllowedForUser).toHaveBeenCalledWith('test_mcp', 'u1', ['planner']);
+    expect(mockMcpRegistry.isAllowedForUser).toHaveBeenCalledWith('test_mcp', 'u1', ['planner'], expect.anything());
   });
 
   test('reauthorizes at execution time after permission revocation', async () => {
     const tools = await service.createTools({ userId: 'u1', piAi: { Type: mockType } });
-    mockMcpRegistry.isAllowedForUser.mockReturnValue(false);
+    mockMcpRegistry.isAllowedForUser.mockResolvedValue(false);
 
     const result = await tools[0].execute('mcp_test_mcp_query', { sql: 'SELECT 1' });
 
@@ -113,7 +113,7 @@ describe('McpAdapterService', () => {
   });
 
   test('allows only the exact connector tool capability for a service principal', async () => {
-    mockMcpRegistry.isAllowedForUser.mockReturnValue(false);
+    mockMcpRegistry.isAllowedForUser.mockResolvedValue(false);
     const exactPrincipal = createInvocationPrincipal({
       type: 'service',
       principalId: 'service:sp-1',
@@ -136,7 +136,7 @@ describe('McpAdapterService', () => {
   });
 
   test('rejects a service principal capability for a different connector tool', async () => {
-    mockMcpRegistry.isAllowedForUser.mockReturnValue(false);
+    mockMcpRegistry.isAllowedForUser.mockResolvedValue(false);
     const unrelatedPrincipal = createInvocationPrincipal({
       type: 'service',
       principalId: 'service:sp-1',

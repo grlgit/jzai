@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Body, Param, Query, Headers, UseInterceptors, UploadedFile, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, Req, Headers, UseInterceptors, UploadedFile, ForbiddenException, UnauthorizedException, NotFoundException } from '@nestjs/common';
 import { UserService } from '../../user/user.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { SkillRegistryService } from './skill-registry.service';
@@ -7,6 +7,8 @@ import { SkillExecutorService } from './skill-executor.service';
 import { SkillGeneratorService } from './skill-generator.service';
 import { CredentialService } from './credential.service';
 import { AppCapabilityService } from '../../platform/app-store/services/app-capability.service';
+import { ResourceAccessService } from '../../platform/authz/resource-access.service';
+import { createUserPrincipal, InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 
 @Controller('api/skills')
 export class SkillController {
@@ -18,12 +20,24 @@ export class SkillController {
     private readonly credentials: CredentialService,
     private readonly userService: UserService,
     private readonly appCapabilities: AppCapabilityService,
+    private readonly access: ResourceAccessService,
   ) {}
 
+  private principalOf(req: any): InvocationPrincipal {
+    return createUserPrincipal(req.user, 'http:skills');
+  }
+
+  /** P1：写端点统一前置——user 类仅 owner、global 类仅 admin 可编辑（修 V4 技能侧） */
+  private async assertSkillEditable(name: string, req: any): Promise<void> {
+    if (!this.registry.get(name)) throw new NotFoundException('Skill not found');
+    await this.access.assertCanEdit('skill', name, this.principalOf(req));
+  }
+
   @Get()
-  async listSkills() {
+  async listSkills(@Req() req: any) {
     const sourceMap = (await this.appCapabilities.getSourceMap()).get('skill');
-    return this.registry.getAll().map(s => ({
+    const skills = await this.registry.getAllForPrincipal(this.principalOf(req));
+    return skills.map(s => ({
       name: s.name,
       description: s.description,
       metadata: s.metadata,
@@ -31,6 +45,7 @@ export class SkillController {
       hasHandler: s.hasHandler,
       hasReferences: s.hasReferences,
       hasAssets: s.hasAssets,
+      scope: s.scope, ownerUserId: s.ownerUserId, canEdit: s.canEdit,
       sourceApp: sourceMap?.get(s.name) ?? null,
     }));
   }
@@ -104,40 +119,47 @@ export class SkillController {
   // ===== Save file content =====
 
   @Put(':name/instructions')
-  saveInstructions(@Param('name') name: string, @Body() body: { content: string }) {
+  async saveInstructions(@Param('name') name: string, @Body() body: { content: string }, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
     return this.registry.saveFileContent(name, 'SKILL.md', body.content, 'instructions');
   }
 
   @Put(':name/skillmd')
-  saveSkillMd(@Param('name') name: string, @Body() body: { content: string }) {
+  async saveSkillMd(@Param('name') name: string, @Body() body: { content: string }, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
     return this.registry.saveFileContent(name, 'SKILL.md', body.content, 'full');
   }
 
   @Post(':name/upload/:dir')
   @UseInterceptors(FileInterceptor('file'))
-  uploadFile(@Param('name') name: string, @Param('dir') dir: string, @UploadedFile() file: Express.Multer.File) {
+  async uploadFile(@Param('name') name: string, @Param('dir') dir: string, @UploadedFile() file: Express.Multer.File, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
     if (!file) return { error: '未收到文件' };
     if (!['references', 'assets', 'scripts'].includes(dir)) return { error: '不支持的目录' };
     return this.registry.saveFileContent(name, `${dir}/${file.originalname}`, file.buffer.toString('utf-8'));
   }
 
   @Put(':name/scripts/:file')
-  saveScript(@Param('name') name: string, @Param('file') file: string, @Body() body: { content: string }) {
+  async saveScript(@Param('name') name: string, @Param('file') file: string, @Body() body: { content: string }, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
     return this.registry.saveFileContent(name, `scripts/${file}`, body.content);
   }
 
   @Put(':name/references/:file')
-  saveReference(@Param('name') name: string, @Param('file') file: string, @Body() body: { content: string }) {
+  async saveReference(@Param('name') name: string, @Param('file') file: string, @Body() body: { content: string }, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
     return this.registry.saveFileContent(name, `references/${file}`, body.content);
   }
 
   @Put(':name/assets/:file')
-  saveAsset(@Param('name') name: string, @Param('file') file: string, @Body() body: { content: string }) {
+  async saveAsset(@Param('name') name: string, @Param('file') file: string, @Body() body: { content: string }, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
     return this.registry.saveFileContent(name, `assets/${file}`, body.content);
   }
 
   @Delete(':name/files/:dir/:file')
-  deleteFile(@Param('name') name: string, @Param('dir') dir: string, @Param('file') file: string) {
+  async deleteFile(@Param('name') name: string, @Param('dir') dir: string, @Param('file') file: string, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
     return this.registry.deleteFile(name, dir, file);
   }
 
@@ -149,8 +171,10 @@ export class SkillController {
     credentials?: { username: string; password: string };
     navigationSteps: string[];
     skillName: string;
-  }) {
-    const result = await this.discovery.discover(body);
+  }, @Req() req: any) {
+    const p = this.principalOf(req);
+    body.skillName = this.registry.allocateSkillName(body.skillName, p);
+    const result = await this.discovery.discover(body, p);
     return {
       success: true,
       skill: this.registry.get(body.skillName),
@@ -171,30 +195,32 @@ export class SkillController {
       systemName: string;
       credentials?: string;
     },
+    @Req() req: any,
   ) {
     if (!harFile) return { success: false, message: 'HAR 文件不能为空' };
     try {
       const credentials = body.credentials ? JSON.parse(body.credentials) : undefined;
+      const p = this.principalOf(req);
       return this.generator.generateFromHar({
         harFile: harFile.buffer,
         description: body.description,
-        skillName: body.skillName,
+        skillName: this.registry.allocateSkillName(body.skillName, p),
         systemName: body.systemName,
         credentials,
-      });
+      }, p);
     } catch (err: any) {
       return { success: false, message: err.message || '生成失败' };
     }
   }
 
   @Put(':name')
-  updateSkill(@Param('name') name: string, @Body() body: { skill: any; handlerCode?: string }) {
-    const existing = this.registry.get(name);
-    if (!existing) return { error: 'Skill not found' };
+  async updateSkill(@Param('name') name: string, @Body() body: { skill: any; handlerCode?: string }, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
+    const existing = this.registry.get(name)!;
 
     try {
-      const updated = { ...existing, ...body.skill, dirName: existing.dirName };
-      this.registry.save(updated, body.handlerCode);
+      const updated = { ...existing, ...body.skill, name: existing.name, dirName: existing.dirName };
+      await this.registry.save(updated, body.handlerCode);
       return { success: true };
     } catch (err: any) {
       return { error: err.message || '保存失败' };
@@ -202,17 +228,24 @@ export class SkillController {
   }
 
   @Delete(':name')
-  deleteSkill(@Param('name') name: string) {
-    return { success: this.registry.delete(name) };
+  async deleteSkill(@Param('name') name: string, @Req() req: any) {
+    await this.assertSkillEditable(name, req);
+    return { success: await this.registry.delete(name) };
   }
 
   @Post(':name/test')
-  async testSkill(@Param('name') name: string) {
+  async testSkill(@Param('name') name: string, @Req() req: any) {
+    if (!(await this.access.canView('skill', name, this.principalOf(req)))) {
+      throw new ForbiddenException('无权使用该技能');
+    }
     return this.executor.test(name);
   }
 
   @Post(':name/execute')
-  async executeSkill(@Param('name') name: string, @Body() params: Record<string, any>) {
+  async executeSkill(@Param('name') name: string, @Body() params: Record<string, any>, @Req() req: any) {
+    if (!(await this.access.canView('skill', name, this.principalOf(req)))) {
+      throw new ForbiddenException('无权使用该技能');
+    }
     return this.executor.execute(name, params);
   }
 
@@ -225,21 +258,22 @@ export class SkillController {
   // ===== Credentials =====
 
   @Get('credentials/list')
-  listCredentials(@Query('userId') userId: string) {
-    if (!userId) return { error: 'userId required' };
-    return this.credentials.listUserSystems(userId);
+  listCredentials(@Req() req: any) {
+    // P1 安全修复（V5）：凭证归属一律取登录身份，忽略入参 userId
+    return this.credentials.listUserSystems(req.user.id);
   }
 
   @Post('credentials/save')
-  saveCredentials(@Body() body: { userId: string; systemName: string; credentials: Record<string, string> }) {
-    this.credentials.saveUserCredentials(body.userId, body.systemName, body.credentials);
+  saveCredentials(@Body() body: { userId?: string; systemName: string; credentials: Record<string, string> }, @Req() req: any) {
+    // P1 安全修复（V5）：忽略 body.userId，凭证写入登录用户名下
+    this.credentials.saveUserCredentials(req.user.id, body.systemName, body.credentials);
     return { success: true };
   }
 
   @Delete('credentials/:systemName')
-  deleteCredentials(@Param('systemName') systemName: string, @Query('userId') userId: string) {
-    if (!userId) return { error: 'userId required' };
-    this.credentials.deleteUserCredentials(userId, systemName);
+  deleteCredentials(@Param('systemName') systemName: string, @Req() req: any) {
+    // P1 安全修复（V5）：只能删自己的凭证
+    this.credentials.deleteUserCredentials(req.user.id, systemName);
     return { success: true };
   }
 

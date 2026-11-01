@@ -23,6 +23,8 @@ export interface SidebarPanel {
   appVersion?: string | null;
   keepAlive?: boolean;
   messageSchema?: string | null;
+  /** P4 移动端声明（/api/sidebar 的 mobile 字段，T4.1 激活链写入） */
+  mobile?: { supported: boolean; entryComponent?: string; layout?: 'full' | 'sheet' } | null;
 }
 
 export function useSidebar(token?: string | null) {

@@ -5,9 +5,10 @@ import { McpRunnerService } from './mcp-runner.service';
 import { DbModule } from '../../db/db.module';
 import { SkillModule } from '../skill/skill.module';
 import { UserModule } from '../../user/user.module';
+import { AuthzModule } from '../../platform/authz/authz.module';
 
 @Module({
-  imports: [DbModule, SkillModule, UserModule],
+  imports: [DbModule, SkillModule, UserModule, AuthzModule],
   controllers: [McpRegistryController],
   providers: [McpRegistryService, McpRunnerService],
   exports: [McpRegistryService, McpRunnerService],

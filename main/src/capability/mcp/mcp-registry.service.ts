@@ -1,10 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { WorkspaceService } from '../../workspace/workspace.service';
 import { ConnectorPermissions, ConnectorStatus } from '../tool/tool-registry.service';
 import { McpHttpClient } from './mcp-http-client';
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
+import { createInvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
+import { ResourceAccessService } from '../../platform/authz/resource-access.service';
+import { ResourceGrantService } from '../../platform/authz/resource-grant.service';
 
 export interface McpToolDef {
   name: string;
@@ -43,7 +47,12 @@ export class McpRegistryService {
   private servers = new Map<string, McpServerDef>();
   private readonly changeListeners = new Set<(name?: string) => void>();
 
-  constructor(private readonly workspace: WorkspaceService) {
+  constructor(
+    private readonly workspace: WorkspaceService,
+    // P1：可选注入——authz 未接线（测试直构）时保持旧行为
+    @Optional() private readonly access?: ResourceAccessService,
+    @Optional() private readonly grantsSvc?: ResourceGrantService,
+  ) {
     this.mcpDir = path.join(this.workspace.getConfigDir(), 'mcp');
     this.loadAll();
   }
@@ -168,13 +177,51 @@ export class McpRegistryService {
     if (server) server.status.lastUsed = new Date().toISOString();
   }
 
-  isAllowedForUser(
+  /**
+   * P1：按 principal 过滤的连接列表（meta/grants 判定，取代下方旧 ACL）。
+   * enabled 过滤由调用方决定（admin 需看到 disabled 项以便管理）。
+   */
+  async getAllForPrincipal(p: InvocationPrincipal): Promise<McpServerDef[]> {
+    if (!this.access) return this.getAll();
+    return this.access.filterVisible('connector', this.getAll(), m => m.name, p);
+  }
+
+  /**
+   * P1：principal 在某连接下可见的工具集。
+   * 返回 null 语义已消化：admin/无 access → 全量；grants 含 sub_id='' → 全量；否则按 sub_id 过滤。
+   */
+  async visibleToolsFor(serverName: string, p: InvocationPrincipal): Promise<McpToolDef[]> {
+    const server = this.servers.get(serverName);
+    if (!server) return [];
+    if (!this.grantsSvc) return server.tools;
+    const subIds = await this.grantsSvc.visibleSubIds('connector', serverName, p);
+    if (subIds === null) return server.tools;
+    if (subIds.size === 0) return [];
+    return server.tools.filter(t => subIds.has(t.name));
+  }
+
+  /**
+   * @deprecated P1 起改由 ResourceAccessService.canView('connector', ...) 判定，调用方分批迁移。
+   * authz 已接线时委托 canView（保留签名）；未接线时回落旧 manifest ACL 语义。
+   */
+  async isAllowedForUser(
     name: string,
     userId?: string,
     roleIds: string | readonly string[] = [],
-  ): boolean {
+    principal?: InvocationPrincipal,
+  ): Promise<boolean> {
     const server = this.servers.get(name);
     if (!server || !server.enabled) return false;
+    if (this.access) {
+      const p = principal ?? (userId ? createInvocationPrincipal({
+        type: 'user', principalId: `user:${userId}`, userId,
+        roleIds: typeof roleIds === 'string' ? [roleIds] : roleIds,
+        origin: 'legacy-mcp-acl', issuedAt: Date.now(),
+      }) : undefined);
+      if (p) return this.access.canView('connector', name, p);
+      return false;
+    }
+    // 旧语义（测试直构/未接线）：manifest permissions
     const p = server.permissions;
     if (!p.allowedRoles?.length && !p.allowedUsers?.length) return true;
     if (userId && p.allowedUsers?.includes(userId)) return true;

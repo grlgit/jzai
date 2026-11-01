@@ -2,27 +2,11 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useI18n } from '@/i18n';
-import { useAuth } from '@/hooks/useAuth';
 import { getMainUrl } from '@/lib/env';
 import type { SidebarPanel } from '@/hooks/useSidebar';
+import { useAppEntries, appEntryPanelTitle, appDisplayName } from '@/hooks/useAppEntries';
 
 const MAIN_URL = getMainUrl();
-
-interface InstalledApp {
-  appId: string;
-  name: string | Record<string, string>;
-  version: string;
-  status: string;
-  description?: string;
-  manifest?: {
-    panels?: { id: string; name: { zh?: string; en?: string }; icon?: string; description?: string }[];
-  };
-}
-
-function appDisplayName(name: InstalledApp['name'], fallback: string): string {
-  if (typeof name === 'string') return name || fallback;
-  return name?.zh || name?.en || fallback;
-}
 
 function PanelIcon({ icon, size = 28 }: { icon: string; size?: number }) {
   if (icon.startsWith('img:')) {
@@ -47,12 +31,11 @@ interface SidebarProps {
 
 export default function Sidebar({ active, onNavigate, panels, onCustomize }: SidebarProps) {
   const { t, locale } = useI18n();
-  const { token } = useAuth();
   const [openGroup, setOpenGroup] = useState<string | null>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [appMenuOpen, setAppMenuOpen] = useState(false);
   const [appMenuPos, setAppMenuPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
-  const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
+  const { apps: installedApps } = useAppEntries();
   const popoverRef = useRef<HTMLDivElement>(null);
   const appMenuRef = useRef<HTMLDivElement>(null);
 
@@ -62,15 +45,6 @@ export default function Sidebar({ active, onNavigate, panels, onCustomize }: Sid
     setPopoverPos({ top: rect.top, left: rect.right + 4 });
     setOpenGroup(groupName);
   }, [openGroup]);
-
-  // Load installed apps for the apps menu
-  useEffect(() => {
-    if (!token) return;
-    fetch(`${MAIN_URL}/api/app-store/apps`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.json())
-      .then(data => { if (Array.isArray(data)) setInstalledApps(data); })
-      .catch(() => {});
-  }, [token]);
 
   // Close popover on outside click
   useEffect(() => {
@@ -217,14 +191,8 @@ export default function Sidebar({ active, onNavigate, panels, onCustomize }: Sid
         )}
 
         {appMenuOpen && (() => {
-          const activeApps = installedApps
-            .filter(a => a.status === 'active')
-            .map(a => ({ ...a, entryPanels: a.manifest?.panels ?? [] }))
-            .filter(a => a.entryPanels.length > 0);
-          const panelTitle = (p: { id: string; name?: { zh?: string; en?: string } }) => {
-            const lang = locale.startsWith('zh') ? 'zh' : 'en';
-            return p.name?.[lang] || p.name?.zh || p.name?.en || p.id;
-          };
+          const activeApps = installedApps;
+          const panelTitle = (p: { id: string; name?: { zh?: string; en?: string } }) => appEntryPanelTitle(p as any, locale);
           return (
             <div ref={appMenuRef} className="fixed bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-3 w-[520px] max-w-[90vw] max-h-[70vh] overflow-y-auto"
               style={{ top: appMenuPos.top, left: appMenuPos.left }}>

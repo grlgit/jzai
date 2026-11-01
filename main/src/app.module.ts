@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD, APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 
 // Platform
@@ -19,6 +20,8 @@ import { PanelModule } from './platform/panel/panel.module';
 import { OemModule } from './platform/oem/oem.module';
 import { EmailModule } from './platform/email/email.module';
 import { AppStoreModule } from './platform/app-store/app-store.module';
+import { AuthzModule } from './platform/authz/authz.module';
+import { SchedulerModule } from './platform/scheduler/scheduler.module';
 
 // Agent engine
 import { AgentModule } from './agent/agent.module';
@@ -37,6 +40,7 @@ import { KnowledgeModule } from './knowledge/knowledge.module';
 import { CoWorkerModule } from './bridge/coworker/coworker.module';
 
 import { JwtAuthGuard } from './platform/auth/jwt-auth.guard';
+import { PermissionsGuard } from './platform/authz/permissions.guard';
 import { GlobalExceptionFilter } from './common/http-exception.filter';
 import { AuditInterceptor } from './common/audit.interceptor';
 import { AppBootstrapService } from './app-bootstrap.service';
@@ -45,8 +49,9 @@ import { AppBootstrapService } from './app-bootstrap.service';
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 300 }]),
+    ScheduleModule.forRoot(),
     // Platform
-    AppConfigModule, CacheModule, WorkspaceModule, DbModule,
+    AppConfigModule, CacheModule, WorkspaceModule, DbModule, AuthzModule, SchedulerModule,
     UserModule, AuthModule, ModelRouterModule, AnalyticsModule,
     EditionModule, SetupModule, UpdateModule, PanelModule, OemModule, EmailModule, AppStoreModule,
     // Agent engine
@@ -62,6 +67,8 @@ import { AppBootstrapService } from './app-bootstrap.service';
     AppBootstrapService,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    // JwtAuthGuard 之后：只对带 @RequirePermission 注解的端点生效（P1 权限体系）
+    { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_INTERCEPTOR, useClass: AuditInterceptor },
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
   ],

@@ -16,6 +16,7 @@ import { CapabilityModule } from '../capability/capability.module';
 import { DataModule } from '../data/data.module';
 import { BridgeModule } from '../bridge/bridge.module';
 import { AppStoreModule } from '../platform/app-store/app-store.module';
+import { AuthzModule } from '../platform/authz/authz.module';
 
 // Core agent services
 import { ChatGateway } from './core/agent.gateway';
@@ -74,6 +75,8 @@ import { PanelController } from './panel/panel.controller';
     CapabilityModule, DataModule, BridgeModule,
     // AppStore integration (for app tool grants)
     AppStoreModule,
+    // P1 权限底座（agent 列表过滤 / CRUD 判定）
+    AuthzModule,
   ],
   controllers: [AgentRegistryController, SessionController, PanelController],
   providers: [
@@ -105,6 +108,7 @@ import { PanelController } from './panel/panel.controller';
   ],
   exports: [
     ChatService, ChatSupportModule,
+    DynamicAgentService,
     ToolBridgeService, TOOL_BRIDGE, DynamicToolProviderRegistry, ContextPrunerService, ContextCompactorService, PromptSynthesizerService,
     PanelMessageRegistry,
   ],

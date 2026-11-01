@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { DbService } from '../../../db/db.service';
 import { AgentRegistryService } from '../../core/agent-registry.service';
+import type { InvocationPrincipal } from '../../../platform/app-store/runtime/invocation-principal';
 
 export interface MessageDisplayConfig {
   toolProcess: boolean;
@@ -36,8 +37,11 @@ export class MessageDisplayService {
     }
   }
 
-  async getAgentConfigs(): Promise<Record<string, Partial<MessageDisplayConfig>>> {
-    const agents = this.agentRegistry.getAll();
+  /** P1：带 principal 时按可见性过滤（不可见 agent 的配置不下发） */
+  async getAgentConfigs(principal?: InvocationPrincipal): Promise<Record<string, Partial<MessageDisplayConfig>>> {
+    const agents = principal
+      ? await this.agentRegistry.getAllForPrincipal(principal)
+      : this.agentRegistry.getAll();
     const result: Record<string, Partial<MessageDisplayConfig>> = {};
     for (const a of agents) {
       if (a.messageDisplay) result[a.id] = a.messageDisplay;
@@ -75,10 +79,10 @@ export class MessageDisplayService {
   }
 
   /** Get full config for a user: global + all agents + user overrides */
-  async getFullConfig(userId: string) {
+  async getFullConfig(userId: string, principal?: InvocationPrincipal) {
     const [global, agents, user] = await Promise.all([
       this.getGlobal(),
-      this.getAgentConfigs(),
+      this.getAgentConfigs(principal),
       this.getUserConfig(userId),
     ]);
     return { global, agents, user };

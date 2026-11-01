@@ -61,6 +61,33 @@ export class AppGrantService {
         [grant.appId, grant.permissionId, grant.targetType, grant.targetId, grant.level],
       );
     }
+    // P1 T1.10：双写 jz_resource_grants（resource_type='app'，sub_id 承载 permissionId，P3 统一授权消费）
+    await this.mirrorToResourceGrants(grant);
+  }
+
+  /** 双写开关：AUTHZ_DUAL_WRITE=0 停止（读路径不依赖新表，停写即回滚） */
+  private async mirrorToResourceGrants(grant: AppGrant): Promise<void> {
+    if (process.env.AUTHZ_DUAL_WRITE === '0') return;
+    try {
+      if (grant.level === 'none') {
+        await this.db.query(
+          `DELETE FROM jz_resource_grants
+           WHERE resource_type='app' AND resource_id=$1 AND sub_id=$2 AND target_type=$3 AND target_id=$4`,
+          [grant.appId, grant.permissionId, grant.targetType, grant.targetId],
+        );
+      } else {
+        await this.db.query(
+          `INSERT INTO jz_resource_grants (resource_type, resource_id, sub_id, target_type, target_id, level, granted_by)
+           VALUES ('app',$1,$2,$3,$4,$5,NULL)
+           ON CONFLICT (resource_type, resource_id, sub_id, target_type, target_id)
+           DO UPDATE SET level=$5`,
+          [grant.appId, grant.permissionId, grant.targetType, grant.targetId, grant.level],
+        );
+      }
+    } catch (err: any) {
+      // 双写失败不阻断旧表语义（表缺失/约束异常时降级为仅旧表）
+      this.logger.warn(`resource_grants dual-write failed for app ${grant.appId}: ${err.message}`);
+    }
   }
 
   async hasPermission(appId: string, permissionId: string, userId: string): Promise<boolean> {

@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { WorkspaceService } from '../../workspace/workspace.service';
+import type { InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
+import { ResourceAccessService } from '../../platform/authz/resource-access.service';
 
 export interface ToolParameter {
   name: string;
@@ -63,9 +65,19 @@ export class ToolRegistryService {
   private readonly toolsDir: string;
   private tools = new Map<string, ToolDefinition>();
 
-  constructor(private readonly workspace: WorkspaceService) {
+  constructor(
+    private readonly workspace: WorkspaceService,
+    // P1：可选注入——authz 未接线（测试直构）时保持旧行为
+    @Optional() private readonly access?: ResourceAccessService,
+  ) {
     this.toolsDir = path.join(this.workspace.getConfigDir(), 'tools');
     this.loadAll();
+  }
+
+  /** P1：按 principal 过滤的工具列表（meta/grants 判定） */
+  async getAllForPrincipal(p: InvocationPrincipal): Promise<ToolDefinition[]> {
+    if (!this.access) return this.getAll();
+    return this.access.filterVisible('tool', this.getAll(), t => t.name, p);
   }
 
   loadAll() {
