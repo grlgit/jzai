@@ -93,7 +93,14 @@ export class UserController {
   @Audit('update_user', 'user')
   @Put('users/:id')
   async updateUser(@Req() req: any, @Param('id') id: string, @Body() body: any) {
-    this.requirePermission(req, 'cfg:users');
+    // 自助改密豁免：本人 + 仅 password 字段（首次登录强制改密）无需 cfg:users
+    const me = await this.userService.verifyTokenFull(this.extractToken(req));
+    if (!me) throw new ForbiddenException('权限不足');
+    const keys = Object.keys(body ?? {});
+    const selfPasswordOnly = me.id === id && keys.length > 0 && keys.every(k => k === 'password');
+    if (!selfPasswordOnly) {
+      this.requirePermission(req, 'cfg:users');
+    }
     return this.userService.updateUser(id, body);
   }
 

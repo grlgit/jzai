@@ -23,6 +23,8 @@ export const ALL_PERMISSIONS = [
   'cw:view', 'cw:manage', 'cw:build',
   'dash:view', 'dash:view_all',
   'cfg:model', 'cfg:automation', 'cfg:users',
+  // 一级菜单导航权限（可单独授予/收回；存量角色由迁移 051 补齐原可见项，行为不变）
+  'nav:skills', 'nav:connectors', 'nav:agents', 'nav:apps', 'nav:dashboard', 'nav:settings',
   'sys:admin',
 ] as const;
 
@@ -33,12 +35,13 @@ export interface Role {
 }
 
 export interface UserPublic {
-  id: string; name: string; username: string; email: string; role: Role; status: string; lastLoginAt?: string;
+  id: string; name: string; username: string; email: string; role: Role; status: string; lastLoginAt?: string; passwordChanged?: boolean;
 }
 
 const DEFAULT_ROLES: Role[] = [
   { id: 'admin', name: '管理员', description: '拥有系统全部权限', permissions: [...ALL_PERMISSIONS], isSystem: true },
-  { id: 'user', name: '普通用户', description: '使用对话、查看企业心智、查看个人看板', permissions: ['chat:use', 'chat:coworker', 'kb:read', 'dash:view'], isSystem: true },
+  { id: 'user', name: '普通用户', description: '使用对话、查看企业心智、查看个人看板',
+    permissions: ['chat:use', 'chat:coworker', 'kb:read', 'dash:view', 'nav:apps', 'nav:dashboard', 'nav:settings'], isSystem: true },
 ];
 
 @Injectable()
@@ -136,6 +139,8 @@ export class UserService implements OnModuleInit {
       'cw:view': '查看CoWorker列表', 'cw:manage': '管理CoWorker配置', 'cw:build': '构建CoWorker镜像',
       'dash:view': '查看个人看板', 'dash:view_all': '查看全员看板',
       'cfg:model': '管理模型配置', 'cfg:automation': '管理快捷系统', 'cfg:users': '管理用户和角色',
+      'nav:skills': '查看技能入口', 'nav:connectors': '查看连接入口', 'nav:agents': '查看智能体入口',
+      'nav:apps': '查看应用入口', 'nav:dashboard': '查看数据仪表面板', 'nav:settings': '进入设置面板',
       'sys:admin': '系统管理员',
     };
     return ALL_PERMISSIONS.map(p => ({ id: p, module: p.split(':')[0], action: p.split(':')[1], label: labels[p] || p }));
@@ -336,7 +341,7 @@ export class UserService implements OnModuleInit {
 
   private async mapUser(row: any): Promise<UserPublic> {
     const role = await this.getRole(row.role_id) || DEFAULT_ROLES[1];
-    return { id: row.id, name: row.name, username: row.username || row.name, email: row.email, role, status: row.status, lastLoginAt: row.last_login_at?.toISOString() };
+    return { id: row.id, name: row.name, username: row.username || row.name, email: row.email, role, status: row.status, lastLoginAt: row.last_login_at?.toISOString(), passwordChanged: row.password_changed !== false };
   }
 
   // ===== User Profile Management (Revised: Reuse jz_users, only extend in jz_user_profiles) =====

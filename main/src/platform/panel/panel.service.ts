@@ -5,12 +5,12 @@ import * as fs from 'fs';
 
 const SEED_PANELS = [
   { id: 'cw',            name: 'AI员工',    icon: 'img:/icons/coworker.svg',    permission: 'cw:view',        isBuiltin: false, sortOrder: 2, category: 'builtin', agentId: null },
-  { id: 'dashboard',     name: '数据仪表',  icon: 'img:/icons/dashboard.svg',   permission: null,             isBuiltin: false, sortOrder: 3, category: 'builtin', agentId: 'data_master' },
-  { id: 'skills',        name: '技能',      icon: 'img:/icons/skills.svg',      permission: 'cfg:automation', isBuiltin: false, sortOrder: 5, category: 'builtin', agentId: 'skill_master' },
-  { id: 'connectors',    name: '连接',      icon: 'img:/icons/connectors.svg',  permission: 'cfg:automation', isBuiltin: false, sortOrder: 6, category: 'builtin', agentId: 'connector_master' },
-  { id: 'agents',        name: '智能体',    icon: 'img:/icons/agents.svg',      permission: 'sys:admin',      isBuiltin: false, sortOrder: 7, category: 'system',  agentId: null },
-  { id: 'apps',          name: '应用',      icon: 'img:/icons/apps.svg',        permission: null,             isBuiltin: false, sortOrder: 8, category: 'builtin', agentId: null },
-  { id: 'cfg',           name: '设置',      icon: '⚙',                          permission: null,             isBuiltin: true,  sortOrder: 9, category: 'system',  agentId: null },
+  { id: 'dashboard',     name: '数据仪表',  icon: 'img:/icons/dashboard.svg',   permission: 'nav:dashboard',  isBuiltin: false, sortOrder: 3, category: 'builtin', agentId: 'data_master' },
+  { id: 'skills',        name: '技能',      icon: 'img:/icons/skills.svg',      permission: 'nav:skills',     isBuiltin: false, sortOrder: 5, category: 'builtin', agentId: 'skill_master' },
+  { id: 'connectors',    name: '连接',      icon: 'img:/icons/connectors.svg',  permission: 'nav:connectors', isBuiltin: false, sortOrder: 6, category: 'builtin', agentId: 'connector_master' },
+  { id: 'agents',        name: '智能体',    icon: 'img:/icons/agents.svg',      permission: 'nav:agents',     isBuiltin: false, sortOrder: 7, category: 'system',  agentId: null },
+  { id: 'apps',          name: '应用',      icon: 'img:/icons/apps.svg',        permission: 'nav:apps',       isBuiltin: false, sortOrder: 8, category: 'builtin', agentId: null },
+  { id: 'cfg',           name: '设置',      icon: '⚙',                          permission: 'nav:settings',   isBuiltin: true,  sortOrder: 9, category: 'system',  agentId: null },
 ];
 
 export interface SidebarItem {

@@ -118,7 +118,7 @@ export default function UserManagePanel({ embedded }: { embedded?: boolean }) {
   // Group permissions by module
   const permGroups: Record<string, PermDef[]> = {};
   allPerms.forEach(p => { (permGroups[p.module] = permGroups[p.module] || []).push(p); });
-  const moduleLabels: Record<string, string> = { chat: '对话', kb: '企业心智', cw: 'CoWorker', dash: '看板', cfg: '设置', sys: '系统' };
+  const moduleLabels: Record<string, string> = { chat: '对话', kb: '企业心智', cw: 'CoWorker', dash: '看板', cfg: '设置', nav: '导航菜单', sys: '系统' };
 
   return (
     <div className={embedded ? 'overflow-y-auto h-full' : 'p-6 overflow-y-auto h-full'}>
