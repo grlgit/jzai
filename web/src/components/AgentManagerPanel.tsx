@@ -84,6 +84,13 @@ export default function AgentManagerPanel() {
 
   useEffect(() => { load(); }, [load]);
 
+  // 右下角操作提示 3 秒后自动消失（删除/保存共用同一 toast）
+  useEffect(() => {
+    if (!msg) return;
+    const timer = setTimeout(() => setMsg(''), 3000);
+    return () => clearTimeout(timer);
+  }, [msg]);
+
   const selectAgent = async (id: string) => {
     const data = await fetch(`${MAIN_URL}/api/agents/${id}`, { headers: authHeaders() }).then(r => r.json());
     setSelected(id);
@@ -127,6 +134,10 @@ export default function AgentManagerPanel() {
       return resp.resolvedTools || [];
     } catch { return []; }
   }, []);
+
+  // 可编辑性与后端 assertCanEdit 对齐：新建可编辑；已有智能体以列表 canEdit 注解为准
+  // （user 类仅 owner、global 类仅 admin；详情接口不带注解，故从列表取）
+  const canEditForm = isNew || !!agents.find(a => a.id === selected)?.canEdit;
 
   const toggleTool = async (toolId: string) => {
     if (!form) return;
@@ -193,8 +204,10 @@ export default function AgentManagerPanel() {
               <h3 className="text-base font-semibold">{form.name || t('agents.newAgent')}</h3>
               {form.builtin && <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-400">{t('common.builtin')}</span>}
               <div className="flex-1" />
-              <button onClick={handleSave} className="text-xs px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700">{t('common.save')}</button>
-              {!form.builtin && selected && (
+              {canEditForm && (
+                <button onClick={handleSave} className="text-xs px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700">{t('common.save')}</button>
+              )}
+              {canEditForm && !form.builtin && selected && (
                 <button onClick={() => handleDelete(form.id)} className="text-xs px-3 py-1 border border-red-200 text-red-500 rounded hover:bg-red-50">{t('common.delete')}</button>
               )}
             </div>
@@ -223,23 +236,24 @@ export default function AgentManagerPanel() {
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">{t('agents.id')}</label>
                       <input value={form.id} onChange={e => setForm({ ...form, id: e.target.value })}
-                        disabled={!isNew} className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" />
+                        disabled={!isNew || !canEditForm} className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" />
                     </div>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">{t('agents.name')}</label>
                       <input value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
-                        className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" />
+                        disabled={!canEditForm} className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" />
                     </div>
                     <div>
                       <label className="block text-xs text-gray-500 mb-1">{t('agents.icon')}</label>
                       <input value={form.icon} onChange={e => setForm({ ...form, icon: e.target.value })}
-                        className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" />
+                        disabled={!canEditForm} className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" />
                     </div>
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">{t('agents.desc')}</label>
                     <input value={form.description} onChange={e => setForm({ ...form, description: e.target.value })}
-                      className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm" />
+
+disabled={!canEditForm} className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm disabled:bg-gray-50" />
                   </div>
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">{t('agents.modelLevel')}</label>
@@ -265,7 +279,7 @@ export default function AgentManagerPanel() {
                         const checked = form.messageDisplay?.[key] ?? true;
                         return (
                           <label key={key} className={`flex items-center gap-2 text-sm px-2 py-1 rounded hover:bg-gray-50 ${globalOff ? 'opacity-40' : 'cursor-pointer'}`}>
-                            <input type="checkbox" checked={checked && !globalOff} disabled={globalOff}
+                            <input type="checkbox" checked={checked && !globalOff} disabled={globalOff || !canEditForm}
                               onChange={() => setForm({ ...form, messageDisplay: { ...form.messageDisplay, [key]: !checked } })}
                               className="rounded border-gray-300 text-indigo-600" />
                             <span>{t(`msgDisplay.${key}`)}</span>
@@ -291,7 +305,7 @@ export default function AgentManagerPanel() {
                           {items.map(t => (
                             <label key={t.id} className="flex items-center gap-1.5 text-sm cursor-pointer hover:bg-gray-50 rounded px-2 py-1">
                               <input type="checkbox" checked={form.tools.includes(t.id)} onChange={() => toggleTool(t.id)}
-                                className="rounded border-gray-300 text-indigo-600" />
+                                disabled={!canEditForm} className="rounded border-gray-300 text-indigo-600" />
                               <span className="truncate" title={t.label}>{t.label}</span>
                             </label>
                           ))}
@@ -327,6 +341,7 @@ export default function AgentManagerPanel() {
                       wordWrap: 'on',
                       scrollBeyondLastLine: false,
                       automaticLayout: true,
+                      readOnly: !canEditForm,
                     }}
                   />
                 </div>

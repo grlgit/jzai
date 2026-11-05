@@ -1,4 +1,8 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, Optional } from '@nestjs/common';
+// 值导入（非 import type）：构造函数参数装饰器需要运行期元数据才能被 Nest DI 解析
+import { AgentRegistryService } from '../../agent/core/agent-registry.service';
+import { ResourceAccessService } from '../authz/resource-access.service';
+import { createUserPrincipal } from '../app-store/runtime/invocation-principal';
 import { DbService } from '../../db/db.service';
 import { WorkspaceService } from '../../workspace/workspace.service';
 import * as fs from 'fs';
@@ -54,6 +58,10 @@ export class PanelService implements OnModuleInit {
   constructor(
     private readonly db: DbService,
     private readonly workspace: WorkspaceService,
+    // @Optional：spec 直构只传 db；面板配对智能体的名称/图标仅用于前端显示
+    @Optional() private readonly agents?: AgentRegistryService,
+    // @Optional：spec 直构不接线时保持旧行为（配对智能体不透出过滤）
+    @Optional() private readonly access?: ResourceAccessService,
   ) {}
 
   async onModuleInit() {
@@ -201,6 +209,29 @@ export class PanelService implements OnModuleInit {
       rows = r;
     }
 
+    // 配对智能体按可见性透出：普通用户不可见的 agent（如 connector_master，meta 'none'）不带出
+    // agentId/名称/图标——前端据此不并入聊天选择器、打开面板也不自动切换（修"普通用户可与连接大师对话"）。
+    // meta 缺失的未纳管 agent（APP 动态 agent）保持旧行为放行。
+    const hiddenAgents = new Set<string>();
+    if (!isAdmin && this.access) {
+      const agentIds = [...new Set(rows.map((r: any) => r.agentId).filter(Boolean))] as string[];
+      if (agentIds.length > 0) {
+        const [uRows, dRows] = await Promise.all([
+          this.db.query(`SELECT role_id FROM jz_users WHERE id = $1`, [userId]),
+          this.db.query(`SELECT department_id FROM jz_department_members WHERE user_id = $1`, [userId]),
+        ]);
+        const principal = createUserPrincipal({
+          id: userId,
+          roleId: uRows.rows[0]?.role_id,
+          departmentIds: dRows.rows.map((d: any) => d.department_id),
+          permissions,
+        }, 'http:sidebar');
+        await Promise.all(agentIds.map(async id => {
+          if (!(await this.access!.canViewOrUnmanaged('agent', id, principal))) hiddenAgents.add(id);
+        }));
+      }
+    }
+
     return rows
       .filter((r: any) => {
         if (r.category === 'third_party') {
@@ -220,7 +251,7 @@ export class PanelService implements OnModuleInit {
         isBuiltin: r.isBuiltin,
         category: r.category ?? 'builtin',
         sourceAppId: r.sourceAppId ?? undefined,
-        agentId: r.agentId ?? undefined,
+        agentId: r.agentId && !hiddenAgents.has(r.agentId) ? r.agentId : undefined,
         uninstallable: !!r.uninstallable,
         nameI18n: r.nameI18n ?? undefined,
         entryComponent: r.entryComponent ?? undefined,
@@ -228,6 +259,11 @@ export class PanelService implements OnModuleInit {
         messageSchema: r.messageSchema ?? undefined,
         mobile: r.mobile ? (typeof r.mobile === 'string' ? JSON.parse(r.mobile) : r.mobile) : undefined,
         appVersion: r.appVersion ?? undefined,
+        // 配对智能体显示元数据（仅 name/icon，不含 soul/提示词）：
+        // 前端在"当前智能体"徽标等处需要显示名，但该智能体可能不在用户可授权列表中（面板配对服务智能体）
+        ...(r.agentId && !hiddenAgents.has(r.agentId) && this.agents?.get(r.agentId)
+          ? { agentName: this.agents.get(r.agentId)!.name, agentIcon: this.agents.get(r.agentId)!.icon }
+          : {}),
       }));
   }
 

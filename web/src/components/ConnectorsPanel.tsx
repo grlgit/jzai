@@ -168,21 +168,27 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
           <div className="flex items-center gap-1.5 min-w-max">
             <span className="text-sm font-medium shrink-0">{t('connectors.title')}</span>
             <div className="flex-1" />
-            <button onClick={connectDatabase} className="px-2 py-1 text-[11px] border border-purple-300 text-purple-600 rounded hover:bg-purple-50 shrink-0 whitespace-nowrap">
-              + 数据库
-            </button>
-            <button onClick={createNew} className="px-2 py-1 text-[11px] bg-indigo-600 text-white rounded hover:bg-indigo-700 shrink-0 whitespace-nowrap">
-              {t('connectors.new')}
-            </button>
-            <button onClick={async () => {
-              await Promise.all([
-                fetch(`${MAIN_URL}/api/mcp/reload`, { method: 'POST', headers: authHeaders() }),
-                fetch(`${MAIN_URL}/api/tools/reload`, { method: 'POST', headers: authHeaders() }),
-              ]);
-              load();
-            }} disabled={loading} className="px-2 py-1 text-[11px] border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-50 shrink-0 whitespace-nowrap">
-              ⟳ 重载
-            </button>
+            {isAdmin && (
+              <>
+                <button onClick={connectDatabase} className="px-2 py-1 text-[11px] border border-purple-300 text-purple-600 rounded hover:bg-purple-50 shrink-0 whitespace-nowrap">
+                  + 数据库
+                </button>
+                <button onClick={createNew} className="px-2 py-1 text-[11px] bg-indigo-600 text-white rounded hover:bg-indigo-700 shrink-0 whitespace-nowrap">
+                  {t('connectors.new')}
+                </button>
+              </>
+            )}
+            {isAdmin && (
+              <button onClick={async () => {
+                await Promise.all([
+                  fetch(`${MAIN_URL}/api/mcp/reload`, { method: 'POST', headers: authHeaders() }),
+                  fetch(`${MAIN_URL}/api/tools/reload`, { method: 'POST', headers: authHeaders() }),
+                ]);
+                load();
+              }} disabled={loading} className="px-2 py-1 text-[11px] border border-gray-200 rounded hover:bg-gray-50 disabled:opacity-50 shrink-0 whitespace-nowrap">
+                ⟳ 重载
+              </button>
+            )}
           </div>
         </div>
 
@@ -191,9 +197,11 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
             <div className="flex flex-col items-center justify-center py-12 text-gray-400">
               <div className="text-3xl mb-2">🔗</div>
               <div className="text-xs mb-1">{t('connectors.empty')}</div>
-              <button onClick={createNew} className="mt-2 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
-                {t('connectors.startCreate')}
-              </button>
+              {isAdmin && (
+                <button onClick={createNew} className="mt-2 px-3 py-1.5 text-xs bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+                  {t('connectors.startCreate')}
+                </button>
+              )}
             </div>
           )}
 
@@ -252,8 +260,8 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
             </div>
           )}
 
-          {/* Recycle Bin */}
-          <ConnectorRecycleBin onRestore={load} />
+          {/* Recycle Bin（恢复/永久删除为管理操作，仅管理员可见） */}
+          {isAdmin && <ConnectorRecycleBin onRestore={load} />}
         </div>
       </div>
 
@@ -287,19 +295,25 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
               <h3 className="text-base font-semibold">{selectedDetail.name}</h3>
               <McpPhase phase={selectedDetail.status?.phase} />
               <div className="flex-1" />
-              <button onClick={() => chatWithAgent(selected!.type, selectedDetail.name)}
-                className="text-xs px-3 py-1 border border-indigo-200 text-indigo-600 rounded hover:bg-indigo-50 flex items-center gap-1" title="与连接大师对话编辑">
-                <img src="/icons/对话.svg" alt="" className="w-3.5 h-3.5" /> 对话
-              </button>
-              <button onClick={() => {
-                if (selected!.type === 'mcp') toggleMcp(selectedDetail.name, !selectedDetail.enabled);
-                else toggleTool(selectedDetail.name, !selectedDetail.enabled);
-              }}
-                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selectedDetail.enabled !== false ? 'bg-indigo-600' : 'bg-gray-300'}`}>
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${selectedDetail.enabled !== false ? 'left-[18px]' : 'left-0.5'}`} />
-              </button>
-              <button onClick={() => selected!.type === 'mcp' ? deleteMcp(selectedDetail.name) : deleteTool(selectedDetail.name)}
-                className="text-xs text-gray-400 hover:text-red-500" title="删除">🗑️</button>
+              {isAdmin && (
+                <button onClick={() => chatWithAgent(selected!.type, selectedDetail.name)}
+                  className="text-xs px-3 py-1 border border-indigo-200 text-indigo-600 rounded hover:bg-indigo-50 flex items-center gap-1" title="与连接大师对话编辑">
+                  <img src="/icons/对话.svg" alt="" className="w-3.5 h-3.5" /> 对话
+                </button>
+              )}
+              {isAdmin && (
+                <>
+                  <button onClick={() => {
+                    if (selected!.type === 'mcp') toggleMcp(selectedDetail.name, !selectedDetail.enabled);
+                    else toggleTool(selectedDetail.name, !selectedDetail.enabled);
+                  }}
+                    className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${selectedDetail.enabled !== false ? 'bg-indigo-600' : 'bg-gray-300'}`}>
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${selectedDetail.enabled !== false ? 'left-[18px]' : 'left-0.5'}`} />
+                  </button>
+                  <button onClick={() => selected!.type === 'mcp' ? deleteMcp(selectedDetail.name) : deleteTool(selectedDetail.name)}
+                    className="text-xs text-gray-400 hover:text-red-500" title="删除">🗑️</button>
+                </>
+              )}
             </div>
 
             {/* DB Schema Cache bar — only for db- MCPs */}
@@ -351,7 +365,7 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
                 <div className="h-full flex flex-col pb-[5px]">
                   <div className="flex items-center gap-2 px-4 py-1.5 bg-gray-800 shrink-0">
                     <span className="text-xs text-gray-400 flex-1">{selected!.type === 'mcp' ? 'manifest.yaml' : 'tool.yaml'}</span>
-                    {editDraft !== manifest && (
+                    {isAdmin && editDraft !== manifest && (
                       <button onClick={async () => {
                         const apiPath = selected!.type === 'mcp'
                           ? `${MAIN_URL}/api/mcp/register`
@@ -372,7 +386,7 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
                       theme="vs-dark"
                       value={editDraft}
                       onChange={(val) => setEditDraft(val || '')}
-                      options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: 'on', scrollBeyondLastLine: false, wordWrap: 'on', tabSize: 2, automaticLayout: true }}
+                      options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: 'on', scrollBeyondLastLine: false, wordWrap: 'on', tabSize: 2, automaticLayout: true, readOnly: !isAdmin }}
                     />
                   </div>
                 </div>
@@ -380,7 +394,7 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
                 <div className="h-full flex flex-col pb-[5px]">
                   <div className="flex items-center gap-2 px-4 py-1.5 bg-gray-800 shrink-0">
                     <span className="text-xs text-gray-400 flex-1">{selected!.type === 'mcp' ? 'mcp-server.ts' : 'handler.ts'}</span>
-                    {handlerDraft !== handlerCode && (
+                    {isAdmin && handlerDraft !== handlerCode && (
                       <button onClick={async () => {
                         setHandlerSaving(true);
                         const apiPath = selected!.type === 'mcp'
@@ -405,7 +419,7 @@ export default function ConnectorsPanel({ onOpenSession }: ConnectorsPanelProps)
                         theme="vs-dark"
                         value={handlerDraft}
                         onChange={(val) => setHandlerDraft(val || '')}
-                        options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: 'on', scrollBeyondLastLine: false, wordWrap: 'on', tabSize: 2, automaticLayout: true }}
+                        options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: 'on', scrollBeyondLastLine: false, wordWrap: 'on', tabSize: 2, automaticLayout: true, readOnly: !isAdmin }}
                       />
                     ) : (
                       <div className="flex items-center justify-center h-full text-xs text-gray-400">无 handler 代码</div>

@@ -1,6 +1,7 @@
 import { Controller, Get, Delete, Patch, Put, Post, Param, Body, Req, NotFoundException, Optional } from '@nestjs/common';
 import { ToolRegistryService } from './tool-registry.service';
 import { AppCapabilityService } from '../../platform/app-store/services/app-capability.service';
+import { ResourceAccessService } from '../../platform/authz/resource-access.service';
 import { RequireAdmin } from '../../platform/authz/require-permission.decorator';
 import { createUserPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 import { AppMcpExposeService } from '../../platform/app-store/services/app-mcp-expose.service';
@@ -10,6 +11,7 @@ export class ToolRegistryController {
   constructor(
     private readonly tools: ToolRegistryService,
     private readonly appCapabilities: AppCapabilityService,
+    private readonly access: ResourceAccessService,
     // P3：mcpExposed 审批状态标记（@Optional 保持旧式构造兼容）
     @Optional() private readonly mcpExpose?: AppMcpExposeService,
   ) {}
@@ -79,7 +81,11 @@ export class ToolRegistryController {
   }
 
   @Get(':name')
-  async getDetail(@Param('name') name: string) {
+  async getDetail(@Param('name') name: string, @Req() req: any) {
+    // 权限修复：详情与列表同真值表——未授权按 404 处理（不回显存在性）
+    if (!(await this.access.canView('tool', name, createUserPrincipal(req.user, 'http:tools')))) {
+      throw new NotFoundException('Not found');
+    }
     const t = this.tools.get(name);
     if (t) return t;
     // APP 包工具无 workspace 详情，返回占位避免前端详情页报 Not found

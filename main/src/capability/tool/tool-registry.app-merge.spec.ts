@@ -22,7 +22,9 @@ function makeCtx(opts: { declared?: any[] } = {}) {
   const mcpExpose = {
     listDeclared: jest.fn(async () => opts.declared ?? []),
   } as unknown as AppMcpExposeService;
-  const ctrl = new ToolRegistryController(tools, appCapabilities, mcpExpose);
+  // 权限修复后 controller 多了 access（ResourceAccessService）构造参数：详情可见性校验
+  const access = { canView: jest.fn(async () => true) } as any;
+  const ctrl = new ToolRegistryController(tools, appCapabilities, access, mcpExpose);
   return { ctrl, tools, sourceMap };
 }
 

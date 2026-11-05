@@ -8,6 +8,7 @@ import { SkillGeneratorService } from './skill-generator.service';
 import { CredentialService } from './credential.service';
 import { AppCapabilityService } from '../../platform/app-store/services/app-capability.service';
 import { ResourceAccessService } from '../../platform/authz/resource-access.service';
+import { RequireAdmin } from '../../platform/authz/require-permission.decorator';
 import { createUserPrincipal, InvocationPrincipal } from '../../platform/app-store/runtime/invocation-principal';
 
 @Controller('api/skills')
@@ -57,11 +58,13 @@ export class SkillController {
     return this.registry.listDeleted();
   }
 
+  @RequireAdmin()
   @Post('deleted/:dirName/restore')
   restore(@Param('dirName') dirName: string) {
     return this.registry.restore(dirName);
   }
 
+  @RequireAdmin()
   @Delete('deleted/:dirName')
   purge(@Param('dirName') dirName: string) {
     return this.registry.purge(dirName);
@@ -70,9 +73,13 @@ export class SkillController {
   // ===== CRUD =====
 
   @Get(':name')
-  getSkill(@Param('name') name: string) {
+  async getSkill(@Param('name') name: string, @Req() req: any) {
     const skill = this.registry.get(name);
     if (!skill) return { error: 'Skill not found' };
+    // 权限修复：详情与列表同真值表——未授权按 404 处理（不回显存在性）
+    if (!(await this.access.canView('skill', name, this.principalOf(req)))) {
+      throw new NotFoundException('Skill not found');
+    }
     return {
       ...skill,
       rawSkillMd: this.registry.getRawSkillMd(name),

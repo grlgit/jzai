@@ -260,7 +260,12 @@ export default function Home() {
   }, []);
 
   // Merge CoWorkers into agent list for ChatInput picker
-  const mergedAgentList = [...agentList, ...myCoWorkers.map((item: any) => ({
+  // 面板配对智能体（数据大师/技能大师等）可被用户经面板调用，但不在其可授权智能体列表中——
+  // 侧栏响应已带出 name/icon（仅显示元数据），并入列表保证输入框徽标显示名称而非 ID。
+  const panelPairedAgents = sidebarPanels
+    .filter(p => p.agentId && (p as any).agentName && !agentList.some(a => a.id === p.agentId))
+    .map(p => ({ id: p.agentId!, name: (p as any).agentName, icon: (p as any).agentIcon, description: '' }));
+  const mergedAgentList = [...agentList, ...panelPairedAgents, ...myCoWorkers.map((item: any) => ({
     id: item.coworker.id,
     name: item.coworker.name,
     icon: '🤝',
@@ -873,7 +878,7 @@ export default function Home() {
                       </>
                     );
                   }
-                  const agentInfo = agentList.find(a => a.id === activeAgent);
+                  const agentInfo = mergedAgentList.find(a => a.id === activeAgent);
                   return <>{agentInfo?.icon || '🔮'} {agentInfo?.name || activeAgent}</>;
                 })()}
                 {myCoWorkers.length > 0 && <span className="text-[10px] text-gray-400">▼</span>}

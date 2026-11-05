@@ -46,9 +46,13 @@ export class AgentRegistryController {
   }
 
   @Get(':id')
-  async get(@Param('id') id: string) {
+  async get(@Param('id') id: string, @Req() req: any) {
     const agent = this.registry.get(id);
     if (!agent) return { error: 'Agent not found' };
+    // 权限修复：详情与列表同真值表——未授权按 404 处理（不回显存在性）
+    if (!(await this.access.canView('agent', id, this.principalOf(req)))) {
+      throw new NotFoundException('Agent not found');
+    }
 
     // Resolve actual runtime tools (expand mcp/tools/skills aggregates)
     let resolvedTools: string[] = [];

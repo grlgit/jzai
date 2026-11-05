@@ -51,6 +51,8 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
   // 授权/分享页签可见性（与原列表按钮同一条件：admin 对 global，owner 对自己的 user 资源）
   const selectedSkill = skills.find(s => s.name === selected);
   const canGrant = !!selectedSkill && (isAdmin ? selectedSkill.scope === 'global' : (selectedSkill.scope === 'user' && selectedSkill.ownerUserId === user?.id));
+  // 可编辑性与后端 assertCanEdit 对齐：user 类仅 owner、global 类仅 admin（列表已带 canEdit 注解）
+  const canEdit = !!selectedSkill?.canEdit;
 
   const load = useCallback(async () => {
     const data = await fetch(`${MAIN_URL}/api/skills`, { headers: authHeaders() }).then(r => r.json()).catch(() => []);
@@ -234,7 +236,8 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
               ))}
             </div>
           )}
-          <SkillRecycleBin onRestore={load} />
+          {/* 回收站（恢复/永久删除为管理操作，仅管理员可见） */}
+          {isAdmin && <SkillRecycleBin onRestore={load} />}
         </div>
       </div>
 
@@ -265,11 +268,15 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
               <h3 className="text-base font-semibold">{detail.name}</h3>
               {detail.metadata?.version && <span className="text-[10px] text-gray-400">v{detail.metadata.version}</span>}
               <div className="flex-1" />
-              <button onClick={() => chatEdit(detail.name)}
-                className="text-xs px-3 py-1 border border-indigo-200 text-indigo-600 rounded hover:bg-indigo-50 flex items-center gap-1">
-                <img src="/icons/对话.svg" alt="" className="w-3.5 h-3.5" /> 对话
-              </button>
-              <button onClick={() => handleDelete(detail.name)} className="text-xs text-gray-400 hover:text-red-500">🗑️</button>
+              {canEdit && (
+                <>
+                  <button onClick={() => chatEdit(detail.name)}
+                    className="text-xs px-3 py-1 border border-indigo-200 text-indigo-600 rounded hover:bg-indigo-50 flex items-center gap-1">
+                    <img src="/icons/对话.svg" alt="" className="w-3.5 h-3.5" /> 对话
+                  </button>
+                  <button onClick={() => handleDelete(detail.name)} className="text-xs text-gray-400 hover:text-red-500">🗑️</button>
+                </>
+              )}
             </div>
 
             {/* Description + metadata */}
@@ -337,14 +344,18 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
                   <div className="h-full flex flex-col">
                     <div className="flex items-center px-5 py-1.5 shrink-0">
                       <div className="flex-1" />
-                      <button onClick={() => { setEditingInstructions('body'); setInstructionsDraft(detail.instructions || ''); }}
-                        className="text-[11px] px-2 py-0.5 text-gray-400 hover:text-indigo-600 border border-gray-200 rounded hover:border-indigo-300">
-                        ✏️ 编辑内容
-                      </button>
-                      <button onClick={() => { setEditingInstructions('source'); setInstructionsDraft(detail.rawSkillMd || ''); }}
-                        className="text-[11px] px-2 py-0.5 ml-1 text-gray-400 hover:text-indigo-600 border border-gray-200 rounded hover:border-indigo-300">
-                        { } 编辑源码
-                      </button>
+                      {canEdit && (
+                        <>
+                          <button onClick={() => { setEditingInstructions('body'); setInstructionsDraft(detail.instructions || ''); }}
+                            className="text-[11px] px-2 py-0.5 text-gray-400 hover:text-indigo-600 border border-gray-200 rounded hover:border-indigo-300">
+                            ✏️ 编辑内容
+                          </button>
+                          <button onClick={() => { setEditingInstructions('source'); setInstructionsDraft(detail.rawSkillMd || ''); }}
+                            className="text-[11px] px-2 py-0.5 ml-1 text-gray-400 hover:text-indigo-600 border border-gray-200 rounded hover:border-indigo-300">
+                            { } 编辑源码
+                          </button>
+                        </>
+                      )}
                     </div>
                     <div className="flex-1 overflow-y-auto px-5 pb-5">
                       <SkillMdPreview
@@ -366,6 +377,7 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
                   onCreateFile={(name) => createNewFile(detail.name, 'scripts', name)}
                   createPlaceholder="文件名 (如 handler.ts)"
                   saving={saving} editorType="code" language="javascript"
+                  readOnly={!canEdit}
                 />
               ) : detailTab === 'references' ? (
                 <FileTabPanel
@@ -376,6 +388,7 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
                   onCreateFile={(name) => createNewFile(detail.name, 'references', name)}
                   createPlaceholder="文件名 (如 fields.md)"
                   saving={saving} editorType="markdown"
+                  readOnly={!canEdit}
                 />
               ) : detailTab === 'assets' ? (
                 <FileTabPanel
@@ -386,6 +399,7 @@ export default function SkillsManagePanel({ messages = [], onOpenSession }: Skil
                   onCreateFile={(name) => createNewFile(detail.name, 'assets', name)}
                   createPlaceholder="文件名 (如 template.json)"
                   saving={saving} editorType="code" language="json"
+                  readOnly={!canEdit}
                 />
               ) : detailTab === 'credentials' ? (
                 <CredentialForm
@@ -465,7 +479,7 @@ function SkillMdPreview({ content, onNavigate }: {
 
 // === File tab panel: tags bar + inline editor ===
 
-function FileTabPanel({ skillName, dir, files, emptyHint, onSaveFile, onDeleteFile, onUpload, onCreateFile, createPlaceholder, saving, editorType, language }: {
+function FileTabPanel({ skillName, dir, files, emptyHint, onSaveFile, onDeleteFile, onUpload, onCreateFile, createPlaceholder, saving, editorType, language, readOnly }: {
   skillName: string;
   dir: string;
   files: string[];
@@ -478,6 +492,7 @@ function FileTabPanel({ skillName, dir, files, emptyHint, onSaveFile, onDeleteFi
   saving: boolean;
   editorType: 'code' | 'markdown';
   language?: string;
+  readOnly?: boolean;
 }) {
   const [activeFile, setActiveFile] = useState<string | null>(null);
   const [content, setContent] = useState('');
@@ -524,12 +539,14 @@ function FileTabPanel({ skillName, dir, files, emptyHint, onSaveFile, onDeleteFi
             activeFile === file ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-100'
           }`}>
             <button onClick={() => selectFile(file)} className="px-1.5 py-0.5">{file}</button>
-            <button onClick={(e) => { e.stopPropagation(); onDeleteFile(skillName, dir, file); }}
-              className="px-0.5 py-0.5 text-gray-300 hover:text-red-500 text-[9px]" title="删除">✕</button>
+            {!readOnly && (
+              <button onClick={(e) => { e.stopPropagation(); onDeleteFile(skillName, dir, file); }}
+                className="px-0.5 py-0.5 text-gray-300 hover:text-red-500 text-[9px]" title="删除">✕</button>
+            )}
           </span>
         ))}
         <span className="flex-1" />
-        {onUpload && (
+        {onUpload && !readOnly && (
           <>
             <input ref={fileInputRef} type="file" className="hidden" onChange={(e) => {
               const f = e.target.files?.[0];
@@ -540,7 +557,7 @@ function FileTabPanel({ skillName, dir, files, emptyHint, onSaveFile, onDeleteFi
               className="text-[10px] px-1.5 py-0.5 text-gray-400 hover:text-indigo-600">上传</button>
           </>
         )}
-        {onCreateFile && !showCreate && (
+        {onCreateFile && !showCreate && !readOnly && (
           <button onClick={() => setShowCreate(true)}
             className="text-[10px] px-1.5 py-0.5 text-gray-400 hover:text-indigo-600">+</button>
         )}
@@ -554,7 +571,7 @@ function FileTabPanel({ skillName, dir, files, emptyHint, onSaveFile, onDeleteFi
             <button onClick={() => setShowCreate(false)} className="text-[10px] text-gray-400">✕</button>
           </div>
         )}
-        {modified && (
+        {modified && !readOnly && (
           <button onClick={handleSave} disabled={saving}
             className="text-[10px] px-2 py-0.5 bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:opacity-50 ml-1">
             {saving ? '...' : '保存'}
@@ -574,7 +591,9 @@ function FileTabPanel({ skillName, dir, files, emptyHint, onSaveFile, onDeleteFi
         ) : loading ? (
           <div className="flex items-center justify-center h-full text-gray-400 text-xs">加载中...</div>
         ) : isMd ? (
-          <MarkdownWysiwyg value={content} onChange={setContent} />
+          readOnly
+            ? <div className="h-full overflow-y-auto px-5 pb-5"><SkillMdPreview content={content} onNavigate={() => {}} /></div>
+            : <MarkdownWysiwyg value={content} onChange={setContent} />
         ) : (
           <MonacoEditor
             height="100%"
@@ -582,7 +601,7 @@ function FileTabPanel({ skillName, dir, files, emptyHint, onSaveFile, onDeleteFi
             theme="vs-dark"
             value={content}
             onChange={(val) => setContent(val || '')}
-            options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: 'on', scrollBeyondLastLine: false, wordWrap: 'on', tabSize: 2, automaticLayout: true }}
+            options={{ minimap: { enabled: false }, fontSize: 12, lineNumbers: 'on', scrollBeyondLastLine: false, wordWrap: 'on', tabSize: 2, automaticLayout: true, readOnly: !!readOnly }}
           />
         )}
       </div>

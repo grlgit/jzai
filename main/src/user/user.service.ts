@@ -41,7 +41,7 @@ export interface UserPublic {
 const DEFAULT_ROLES: Role[] = [
   { id: 'admin', name: '管理员', description: '拥有系统全部权限', permissions: [...ALL_PERMISSIONS], isSystem: true },
   { id: 'user', name: '普通用户', description: '使用对话、查看企业心智、查看个人看板',
-    permissions: ['chat:use', 'chat:coworker', 'kb:read', 'dash:view', 'nav:apps', 'nav:dashboard', 'nav:settings'], isSystem: true },
+    permissions: ['chat:use', 'chat:coworker', 'kb:read', 'dash:view', 'nav:apps', 'nav:dashboard'], isSystem: true },
 ];
 
 @Injectable()

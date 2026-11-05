@@ -59,6 +59,15 @@ export class ResourceAccessService {
     return this.grants.hasGrant(t, id, p);
   }
 
+  /**
+   * 面板配对场景可见性：meta 缺失 = 未纳管（APP 动态 agent 等从未回填的资源），
+   * 保持旧行为放行；meta 存在则按真值表判定（connector_master 'none' → 普通用户不可见）。
+   */
+  async canViewOrUnmanaged(t: ResourceType, id: string, p: InvocationPrincipal): Promise<boolean> {
+    if (await this.canView(t, id, p)) return true;
+    return !(await this.meta.get(t, id));
+  }
+
   async canEdit(t: ResourceType, id: string, p: InvocationPrincipal): Promise<boolean> {
     if (!this.enforced) return this.isAdmin(p);
     const m = await this.meta.get(t, id);

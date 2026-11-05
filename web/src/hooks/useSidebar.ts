@@ -16,6 +16,9 @@ export interface SidebarPanel {
   isBuiltin: boolean;
   category?: string;
   agentId?: string | null;
+  /** 面板配对智能体的显示名/图标（仅显示元数据，见 panel.service.ts） */
+  agentName?: string;
+  agentIcon?: string;
   uninstallable?: boolean;
   nameI18n?: { zh?: string; en?: string } | null;
   sourceAppId?: string | null;
