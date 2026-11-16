@@ -83,13 +83,17 @@ export default function SessionList({ token, agentType, currentSessionId, onSele
     <div
       ref={panelRef}
       className={mobile
-        ? `fixed inset-0 bg-white z-40 flex flex-col transition-transform duration-200 ease-out ${
-            visible ? 'translate-x-0' : '-translate-x-full pointer-events-none'
-          }`
-        : `absolute left-0 top-0 bottom-[50%] w-64 bg-white border-r border-gray-200 shadow-xl z-30 flex flex-col rounded-br-lg overflow-hidden transition-all duration-200 ease-out ${
-            visible ? 'opacity-100 translate-x-0' : 'opacity-0 -translate-x-full pointer-events-none'
-          }`
+        ? 'fixed inset-0 bg-white z-40 flex flex-col transition-transform duration-200 ease-out'
+        : 'absolute left-0 top-0 bottom-[50%] w-64 bg-white border-r border-gray-200 shadow-xl z-30 flex flex-col rounded-br-lg overflow-hidden transition-all duration-200 ease-out'
       }
+      // 兼容旧内核 WebView（钉钉内置浏览器等）：Tailwind v4 的 translate-x-* 编译为独立
+      // translate 属性（Chrome 104+ 才支持），旧内核不生效会导致关闭态面板全屏可见且点击穿透，
+      // 因此改用老内核均支持的 transform 属性实现位移。
+      style={{
+        transform: visible ? 'translateX(0)' : 'translateX(-100%)',
+        opacity: visible || mobile ? 1 : 0,
+        pointerEvents: visible ? 'auto' : 'none',
+      }}
     >
       <div className={`flex items-center gap-2 px-3 border-b border-gray-200 shrink-0 ${mobile ? 'py-3 pt-[calc(0.75rem+env(safe-area-inset-top))]' : 'py-2.5'}`}>
         <span className="text-sm font-medium flex-1">{t('session.title')}</span>

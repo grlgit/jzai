@@ -39,7 +39,7 @@ import { getMainUrl } from '@/lib/env';
 const MAIN_URL = getMainUrl();
 
 export default function Home() {
-  const { user, token, loading: authLoading, login, logout, isAdmin, getRoleName } = useAuth();
+  const { user, token, loading: authLoading, dingtalkAuthenticating, feishuAuthenticating, login, logout, isAdmin, getRoleName } = useAuth();
   const [setupPhase, setSetupPhase] = useState<'loading' | 'pending' | 'registered' | 'complete'>('loading');
   const [needsGuidedConfig, setNeedsGuidedConfig] = useState(false);
   const [companyName, setCompanyName] = useState('');
@@ -589,7 +589,7 @@ export default function Home() {
     logout();
   }, [logout]);
 
-  if (authLoading || setupPhase === 'loading') return <div className="h-full flex items-center justify-center text-gray-400">{t('user.loading')}</div>;
+  if (authLoading || dingtalkAuthenticating || feishuAuthenticating || setupPhase === 'loading') return <div className="h-full flex items-center justify-center text-gray-400">{t('user.loading')}</div>;
   if (setupPhase !== 'complete' && !user) return <InitWizard onComplete={() => {
     setSetupPhase('complete');
     fetch(`${MAIN_URL}/api/setup/status`).then(r => r.json()).then(data => {

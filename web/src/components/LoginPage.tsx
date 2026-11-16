@@ -27,6 +27,13 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
   const [outdatedBrowser, setOutdatedBrowser] = useState(false);
 
   useEffect(() => {
+    // 钉钉内置 WebView 不支持 oklch 会触发本检测；项目已做样式降级（色值兜底 + @supports 渐变），
+    // 跳过横幅，但把内核版本打到 console 便于排查兼容问题
+    if (/DingTalk/i.test(navigator.userAgent)) {
+      const m = navigator.userAgent.match(/Chrome\/(\d+)/);
+      console.log(`[compat] 钉钉 WebView 内核: ${m ? `Chrome ${m[1]}` : navigator.userAgent.slice(0, 120)}`);
+      return;
+    }
     if (!detectModernCss()) setOutdatedBrowser(true);
   }, []);
 
@@ -238,7 +245,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">{t('login.account')}</label>
               <div className="relative">
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300">
+                <div className="absolute left-3 top-1/2 text-gray-300" style={{ transform: 'translateY(-50%)' }}>
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" />
                   </svg>
@@ -257,7 +264,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1.5">{t('login.password')}</label>
               <div className="relative">
-                <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-300">
+                <div className="absolute left-3 top-1/2 text-gray-300" style={{ transform: 'translateY(-50%)' }}>
                   <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" />
                   </svg>
@@ -270,7 +277,8 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                   placeholder={t('login.passwordPlaceholder')}
                 />
                 <button type="button" onClick={() => setShowPwd(!showPwd)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500 transition-colors">
+                  className="absolute right-3 top-1/2 text-gray-300 hover:text-gray-500 transition-colors"
+                  style={{ transform: 'translateY(-50%)' }}>
                   {showPwd ? (
                     <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />

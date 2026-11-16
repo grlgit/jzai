@@ -75,8 +75,16 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
+    "postcss-preset-env": "^11.6.2",
     "tailwindcss": "^4",
     "tsx": "^4.23.12",
     "typescript": "^5"
-  }
+  },
+  "browserslist": [
+    "chrome >= 88",
+    "edge >= 88",
+    "and_chr >= 88",
+    "safari >= 14",
+    "ios_saf >= 14"
+  ]
 }

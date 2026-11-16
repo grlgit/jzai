@@ -1,5 +1,7 @@
 import { Controller, Get, Post, Put, Delete, Body, Param, Req, UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { UserService, Permission } from './user.service';
+import { DingtalkService } from './dingtalk.service';
+import { FeishuService } from './feishu.service';
 import { Public } from '../platform/auth/public.decorator';
 import { Audit } from '../common/audit.interceptor';
 
@@ -10,6 +12,8 @@ import * as crypto from 'crypto';
 export class UserController {
   constructor(
     private readonly userService: UserService,
+    private readonly dingtalkService: DingtalkService,
+    private readonly feishuService: FeishuService,
     private readonly db: DbService,
   ) {}
 
@@ -31,6 +35,52 @@ export class UserController {
       this.writeAudit(null, account, 'login_failed', 'auth', null, { reason: e.message }, ip, ua);
       throw new UnauthorizedException(e.message);
     }
+  }
+
+  /** 钉钉免登：前端 requestAuthCode 得到的临时授权码换取系统 token */
+  @Public()
+  @Post('auth/dingtalk')
+  async dingtalkLogin(@Req() req: any, @Body() body: { authCode: string }) {
+    const ip = req.ip;
+    const ua = req.headers?.['user-agent'] || null;
+    try {
+      const result = await this.dingtalkService.loginWithAuthCode(body.authCode);
+      this.writeAudit(result.user.id, result.user.username, result.isNewUser ? 'dingtalk_login_signup' : 'dingtalk_login', 'auth', null, null, ip, ua);
+      return result;
+    } catch (e: any) {
+      this.writeAudit(null, null, 'dingtalk_login_failed', 'auth', null, { reason: e.message }, ip, ua);
+      throw new UnauthorizedException(e.message);
+    }
+  }
+
+  /** 前端免登所需的 corpId（取自 DINGTALK_CORP_ID 环境变量；corpId 非敏感信息） */
+  @Public()
+  @Get('auth/dingtalk/corpId')
+  dingtalkCorpId() {
+    return { corpId: this.dingtalkService.corpId };
+  }
+
+  /** 飞书免登：前端 h5sdk getAuthCode / OAuth 重定向得到的临时授权码换取系统 token */
+  @Public()
+  @Post('auth/feishu')
+  async feishuLogin(@Req() req: any, @Body() body: { authCode: string; redirectUri?: string }) {
+    const ip = req.ip;
+    const ua = req.headers?.['user-agent'] || null;
+    try {
+      const result = await this.feishuService.loginWithAuthCode(body.authCode, body.redirectUri);
+      this.writeAudit(result.user.id, result.user.username, result.isNewUser ? 'feishu_login_signup' : 'feishu_login', 'auth', null, null, ip, ua);
+      return result;
+    } catch (e: any) {
+      this.writeAudit(null, null, 'feishu_login_failed', 'auth', null, { reason: e.message }, ip, ua);
+      throw new UnauthorizedException(e.message);
+    }
+  }
+
+  /** 前端免登所需的飞书 app_id（h5sdk getAuthCode 与 OAuth 跳转参数；app_id 非敏感信息） */
+  @Public()
+  @Get('auth/feishu/appId')
+  feishuAppId() {
+    return { appId: this.feishuService.publicAppId };
   }
 
   @Get('auth/me')

@@ -125,3 +125,39 @@ body {
 .jz-dash input::placeholder, .jz-dash textarea::placeholder {
   color: var(--jz-faint);
 }
+
+/* ══════════ 旧内核 placeholder 颜色兜底（钉钉/企微内置 WebView 等）══════════
+   部分旧内核不提供默认灰色 placeholder（渲染为黑色），且只认 -webkit- 前缀
+   伪元素。标准与前缀必须分成两条规则：混在同一选择器列表里，遇到不认识的
+   选择器时整条规则会被丢弃。元素选择器特异性低于工具类，已有
+   placeholder-* 类的地方不受影响。 */
+::-webkit-input-placeholder {
+  color: #9ca3af; /* gray-400 */
+}
+input::placeholder, textarea::placeholder {
+  color: #9ca3af; /* gray-400 */
+}
+
+/* ══════════ 旧内核渐变兼容（钉钉/企微内置 WebView 等）══════════
+   Tailwind v4 渐变默认 --tw-gradient-position 带 `in oklab` 插值（Chrome 111+），
+   老内核解析失败 → 整条 background-image 失效 → 渐变消失。
+   注意 !important：postcss-preset-env 展平 @layer 后工具类带 :not(#\#) 链（特异性更高），
+   本块必须用 !important 才能覆盖（仅旧内核上生效）。 */
+@supports not (color: color-mix(in lab, red, red)) {
+  .bg-gradient-to-t,
+  .bg-linear-to-t { --tw-gradient-position: to top !important; }
+  .bg-gradient-to-tr,
+  .bg-linear-to-tr { --tw-gradient-position: to top right !important; }
+  .bg-gradient-to-r,
+  .bg-linear-to-r { --tw-gradient-position: to right !important; }
+  .bg-gradient-to-br,
+  .bg-linear-to-br { --tw-gradient-position: to bottom right !important; }
+  .bg-gradient-to-b,
+  .bg-linear-to-b { --tw-gradient-position: to bottom !important; }
+  .bg-gradient-to-bl,
+  .bg-linear-to-bl { --tw-gradient-position: to bottom left !important; }
+  .bg-gradient-to-l,
+  .bg-linear-to-l { --tw-gradient-position: to left !important; }
+  .bg-gradient-to-tl,
+  .bg-linear-to-tl { --tw-gradient-position: to top left !important; }
+}
